@@ -4,6 +4,7 @@ import customtkinter as ctk
 from views.print_view import PrintView
 from views.template_editor import TemplateEditorView
 from views.zpl_view import ZPLView
+from pathlib import Path
 
 
 class MainWindow(ctk.CTk):
@@ -14,6 +15,14 @@ class MainWindow(ctk.CTk):
         printer_service,
     ):
         super().__init__()
+
+        icon_path = (
+            Path(__file__).resolve().parent.parent
+            / "assets"
+            / "greenup_label_printer_icon.ico"
+        )
+
+        self.iconbitmap(str(icon_path))
 
         self.template_service = template_service
         self.zpl_service = zpl_service
