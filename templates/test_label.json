@@ -1,0 +1,16 @@
+{
+    "id": "citizen_test",
+    "name": "Citizen Test 75x49",
+    "description": "Testowa etykieta GreenUp! dla drukarki Citizen CL-S700II",
+    "width": 75,
+    "height": 49,
+    "fields": [
+        {
+            "name": "custom_field",
+            "label": "Wartość etykiety",
+            "default": "",
+            "required": true
+        }
+    ],
+    "zpl": "^XA\n^PW600\n^LL392\n\n^FO16,16\n^A0N,28,28\n^FDGREENUP! CITIZEN TEST 75x49^FS\n\n^FO0,0\n^GB440,60^FS\n\n^FO16,76\n^A0N,24,24\n^FDMODEL: CITIZEN CL-S700II^FS\n\n^FO16,116\n^A0N,20,20\n^FDIP : 192.168.130.92^FS\n\n^FO200,116\n^A0N,20,20\n^FDPORT : 9100^FS\n\n^FO0,60\n^GB440,88^FS\n\n^FO0,0\n^GB600,148^FS\n\n^FO16,164\n^A0N,24,24\n^FD{{custom_field}}^FS\n\n^FO16,204\n^BCN,120,N,N,N\n^FD{{custom_field}}^FS\n\n^FO456,0\n^BQN,2,6\n^FDMA,{{custom_field}}^FS\n\n^XZ"
+}
