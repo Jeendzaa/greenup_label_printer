@@ -1,0 +1,34 @@
+{
+    "id" : "seed_in",
+    "name" : "Etykieta nasion",
+    "description" : "Etykieta identyfikacyjna dostawy roślin",
+    "width": 75,
+    "height" : 49,
+    "fields" : [
+        {
+            "name" : "index",
+            "label" : "Indeks",
+            "default" : "",
+            "required" : true
+        },
+        {
+            "name" : "order_number",
+            "label" : "Numer zamówienia",
+            "default" : "",
+            "required" : true
+        },
+        {
+            "name" : "batch_in",
+            "label" : "Numer partii",
+            "default" : "",
+            "required" : true
+        },
+        {
+            "name" : "batch_out",
+            "label" : "Batch",
+            "default" : "",
+            "required" : true
+        }
+    ],
+    "zpl": "^XA\n^PW600\n^LL392\n\n^FO16,16^GB189,360^FS\n^FO205,16^GB189,360^FS\n^FO394,16^GB189,360^FS\n\n^FO544,32^A0R,24,24^FDINDEKS : {{index}}^FS\n^FO504,32^A0R,24,24^FDNR. ZAM : {{order_number}}^FS\n^FO464,32^A0R,24,24^FDNR. PARTII : {{batch_in}}^FS\n^FO424,32^A0R,24,24^FDBATCH : {{batch_out}}^FS\n\n^FO354,32^A0R,24,24^FDINDEKS : {{index}}^FS\n^FO314,32^A0R,24,24^FDNR. ZAM : {{order_number}}^FS\n^FO274,32^A0R,24,24^FDNR. PARTII : {{batch_in}}^FS\n^FO234,32^A0R,24,24^FDBATCH : {{batch_out}}^FS\n\n^FO169,32^A0R,24,24^FDINDEKS : {{index}}^FS\n^FO129,32^A0R,24,24^FDNR. ZAM : {{order_number}}^FS\n^FO89,32^A0R,24,24^FDNR. PARTII : {{batch_in}}^FS\n^FO49,32^A0R,24,24^FDBATCH : {{batch_out}}^FS\n\n^XZ"
+}
