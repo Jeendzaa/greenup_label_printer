@@ -11,20 +11,29 @@ class TemplateService:
             templates_dir = project_dir / "templates"
         self.templates_dir = Path(templates_dir)
 
+
     def load_templates(self):
         if not self.templates_dir.is_dir():
-            raise FileNotFoundError(f"Nie znaleziono folderów szablonów: {self.templates_dir}")
+            raise FileNotFoundError(
+                f"Nie znaleziono folderu szablonów: {self.templates_dir}"
+            )
+
         templates = []
+
         for file_path in sorted(self.templates_dir.glob("*.json")):
             try:
                 with file_path.open("r", encoding="utf-8") as file:
                     template = json.load(file)
+
                 self._validate_template(template)
                 template["_file"] = file_path.name
                 templates.append(template)
+
             except (json.JSONDecodeError, ValueError) as error:
                 print(f"Błąd szablonu '{file_path.name}': {error}")
-            return templates
+
+        return templates
+
 
     def get_template_by_id(self, template_id):
         for template in self.load_templates():

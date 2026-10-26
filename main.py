@@ -1,26 +1,22 @@
+
 from services.template_service import TemplateService
+from services.zpl_service import ZPLService
+from services.printer_service import PrinterService
+from views.main_window import MainWindow
+
 
 def main():
     template_service = TemplateService()
-    templates = template_service.load_templates()
+    zpl_service = ZPLService()
+    printer_service = PrinterService()
 
-    print(f"Liczba szablonów: {len(templates)}")
-    for template in templates:
-        print(f"\nNazwa: {template['name']}")
-        print(f"ID: {template['id']}")
-        print(f"Plik: {template['_file']}")
-        print(
-            f"Wymiary: {template['width']} × "
-            f"{template['height']} mm"
-        )
+    app = MainWindow(
+        template_service=template_service,
+        zpl_service=zpl_service,
+        printer_service=printer_service,
+    )
 
-        print("Pola:")
-
-        for field in template["fields"]:
-            print(
-                f"  {field['label']} "
-                f"(domyślnie: {field.get('default', '')})"
-            )
+    app.mainloop()
 
 
 if __name__ == "__main__":
