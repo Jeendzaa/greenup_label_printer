@@ -1,4 +1,3 @@
-
 import customtkinter as ctk
 from tkinter import messagebox
 from PIL import Image as PILImage
@@ -42,6 +41,10 @@ class PrintView(ctk.CTkFrame):
 
         self.bind("<Destroy>", self._on_destroy, add="+")
 
+    # =========================================================
+    # UI
+    # =========================================================
+
     def _create_widgets(self):
         description = ctk.CTkLabel(
             self,
@@ -59,7 +62,10 @@ class PrintView(ctk.CTkFrame):
             pady=(0, 18),
         )
 
+        # -----------------------------------------------------
         # Lewy panel: formularz
+        # -----------------------------------------------------
+
         self.form_panel = ctk.CTkFrame(
             self,
             fg_color="#2A3744",
@@ -72,7 +78,7 @@ class PrintView(ctk.CTkFrame):
             padx=(0, 12),
         )
         self.form_panel.grid_columnconfigure(0, weight=1)
-        self.form_panel.grid_rowconfigure(3, weight=1)
+        self.form_panel.grid_rowconfigure(4, weight=1)
 
         ctk.CTkLabel(
             self.form_panel,
@@ -100,13 +106,29 @@ class PrintView(ctk.CTkFrame):
             pady=(0, 12),
         )
 
+        # Stała informacja o rzeczywistych wymiarach etykiety.
+        # Jest niezależna od komunikatów drukowania.
+        self.dimensions_label = ctk.CTkLabel(
+            self.form_panel,
+            text="",
+            text_color="#AAB7C4",
+            font=ctk.CTkFont(size=12, weight="bold"),
+        )
+        self.dimensions_label.grid(
+            row=2,
+            column=0,
+            sticky="w",
+            padx=20,
+            pady=(0, 10),
+        )
+
         # Ilość drukowanych kopii
         quantity_frame = ctk.CTkFrame(
             self.form_panel,
             fg_color="transparent",
         )
         quantity_frame.grid(
-            row=2,
+            row=3,
             column=0,
             sticky="ew",
             padx=20,
@@ -147,7 +169,7 @@ class PrintView(ctk.CTkFrame):
             fg_color="transparent",
         )
         self.form_frame.grid(
-            row=3,
+            row=4,
             column=0,
             sticky="nsew",
             padx=12,
@@ -163,7 +185,7 @@ class PrintView(ctk.CTkFrame):
             justify="left",
         )
         self.status_label.grid(
-            row=4,
+            row=5,
             column=0,
             sticky="w",
             padx=20,
@@ -179,14 +201,17 @@ class PrintView(ctk.CTkFrame):
             command=self._print_label,
         )
         self.print_button.grid(
-            row=5,
+            row=6,
             column=0,
             sticky="ew",
             padx=20,
             pady=(5, 20),
         )
 
+        # -----------------------------------------------------
         # Prawy panel: podgląd
+        # -----------------------------------------------------
+
         self.preview_panel = ctk.CTkFrame(
             self,
             fg_color="#2A3744",
@@ -213,9 +238,11 @@ class PrintView(ctk.CTkFrame):
             pady=(20, 10),
         )
 
+        # Ciemne tło pozwala zobaczyć rzeczywistą krawędź
+        # białej etykiety, tak samo jak w edytorze graficznym.
         self.preview_container = ctk.CTkFrame(
             self.preview_panel,
-            fg_color="#FFFFFF",
+            fg_color="#303B46",
             corner_radius=6,
         )
         self.preview_container.grid(
@@ -231,8 +258,8 @@ class PrintView(ctk.CTkFrame):
         self.preview_label = ctk.CTkLabel(
             self.preview_container,
             text="Podgląd pojawi się tutaj",
-            text_color="#333333",
-            fg_color="#FFFFFF",
+            text_color="#AAB7C4",
+            fg_color="transparent",
         )
         self.preview_label.grid(
             row=0,
@@ -257,13 +284,33 @@ class PrintView(ctk.CTkFrame):
             pady=(0, 15),
         )
 
+    # =========================================================
+    # TEMPLATE LOADING
+    # =========================================================
+
     def _load_templates(self):
+        """Wczytuje szablony przy pierwszym uruchomieniu widoku."""
+        self.refresh_templates()
+
+    def refresh_templates(self):
+        """
+        Ponownie odczytuje szablony z dysku.
+
+        Zachowuje aktualny wybór, jeśli wybrany szablon nadal istnieje.
+        Metoda jest wywoływana przy każdym wejściu do zakładki drukowania.
+        """
+        if self._destroyed:
+            return
+
+        previous_name = self.template_selector.get()
+
         try:
             templates = self.template_service.load_templates()
 
             self.templates_by_name = {
                 template["name"]: template
                 for template in templates
+                if isinstance(template, dict) and template.get("name")
             }
 
             names = list(self.templates_by_name.keys())
@@ -273,8 +320,26 @@ class PrintView(ctk.CTkFrame):
                     values=["Brak szablonów"],
                     state="disabled",
                 )
+                self.template_selector.set("Brak szablonów")
+
+                self._clear_form()
+
+                self.dimensions_label.configure(text="")
+
+                self.preview_label.configure(
+                    image=None,
+                    text="Brak szablonów do wyświetlenia",
+                )
+                self.preview_image = None
+
+                self.preview_status.configure(
+                    text="Dodaj szablon w zakładce Edytor szablonów.",
+                    text_color="#AAB7C4",
+                )
+
                 self.status_label.configure(
-                    text="Nie znaleziono szablonów JSON."
+                    text="Nie znaleziono szablonów JSON.",
+                    text_color="#AAB7C4",
                 )
                 return
 
@@ -282,12 +347,20 @@ class PrintView(ctk.CTkFrame):
                 values=names,
                 state="readonly",
             )
-            self.template_selector.set(names[0])
-            self._on_template_selected(names[0])
 
-        except (OSError, ValueError) as error:
+            selected_name = (
+                previous_name
+                if previous_name in self.templates_by_name
+                else names[0]
+            )
+
+            self.template_selector.set(selected_name)
+            self._on_template_selected(selected_name)
+
+        except (OSError, ValueError, KeyError, TypeError) as error:
             self.status_label.configure(
-                text=f"Błąd wczytywania szablonów: {error}"
+                text=f"Błąd wczytywania szablonów: {error}",
+                text_color="#F08080",
             )
 
     def _on_template_selected(self, template_name):
@@ -298,15 +371,18 @@ class PrintView(ctk.CTkFrame):
 
         self._clear_form()
 
-        for row, field in enumerate(template["fields"]):
-            label_text = field["label"]
+        fields = self._get_template_fields(template)
+
+        for row, field in enumerate(fields):
+            name = field["name"]
+            label = field["label"]
 
             if field.get("required", False):
-                label_text += " *"
+                label += " *"
 
             ctk.CTkLabel(
                 self.form_frame,
-                text=label_text,
+                text=label,
                 font=ctk.CTkFont(size=13),
             ).grid(
                 row=row * 2,
@@ -328,23 +404,97 @@ class PrintView(ctk.CTkFrame):
             )
 
             default = field.get("default", "")
+
             if default:
-                entry.insert(0, default)
+                entry.insert(0, str(default))
 
-            entry.bind("<KeyRelease>", self._on_field_changed)
-            entry.bind("<FocusOut>", self._on_field_changed)
+            entry.bind(
+                "<KeyRelease>",
+                self._on_field_changed,
+            )
+            entry.bind(
+                "<FocusOut>",
+                self._on_field_changed,
+            )
 
-            self.field_entries[field["name"]] = entry
+            self.field_entries[name] = entry
+
+        self.dimensions_label.configure(
+            text=f"Wymiary etykiety: {template['width']} × {template['height']} mm"
+        )
 
         self.status_label.configure(
-            text=(
-                f"{template['width']} × {template['height']} mm"
-                " | Pola oznaczone * są wymagane."
-            ),
+            text="Pola oznaczone * są wymagane.",
             text_color="#AAB7C4",
         )
 
         self._schedule_preview()
+
+    def _get_template_fields(self, template):
+        """
+        Zwraca wszystkie pola formularza dla wybranego szablonu.
+
+        Obsługiwane są dwa formaty:
+
+        1. Nowy:
+           elements -> elementy typu data
+
+        2. Starszy:
+           fields -> osobna lista pól danych
+
+        Jeżeli oba formaty zawierają pole o tej samej nazwie,
+        pierwszeństwo ma nowe pole z elements.
+        """
+
+        result = []
+        used_names = set()
+
+        # Nowe pola definiowane bezpośrednio w elementach szablonu.
+        for element in template.get("elements", []):
+            if not isinstance(element, dict):
+                continue
+
+            if element.get("type") != "data":
+                continue
+
+            name = element.get("name")
+
+            if not name or name in used_names:
+                continue
+
+            result.append({
+                "name": name,
+                "label": element.get("label", name),
+                "default": "",
+                "required": element.get("required", True),
+            })
+
+            used_names.add(name)
+
+        # Obsługa starszych szablonów.
+        for field in template.get("fields", []):
+            if not isinstance(field, dict):
+                continue
+
+            name = field.get("name")
+
+            if not name or name in used_names:
+                continue
+
+            result.append({
+                "name": name,
+                "label": field.get("label", name),
+                "default": field.get("default", ""),
+                "required": field.get("required", False),
+            })
+
+            used_names.add(name)
+
+        return result
+
+    # =========================================================
+    # FORM
+    # =========================================================
 
     def _clear_form(self):
         self._cancel_preview_job()
@@ -362,6 +512,7 @@ class PrintView(ctk.CTkFrame):
 
         if quantity_text.isdigit() and int(quantity_text) > 0:
             quantity = int(quantity_text)
+
             self.print_button.configure(
                 text=f"Drukuj {quantity} szt."
             )
@@ -369,6 +520,42 @@ class PrintView(ctk.CTkFrame):
             self.print_button.configure(
                 text="Drukuj etykiety"
             )
+
+    def _get_current_values(self):
+        return {
+            name: entry.get()
+            for name, entry in self.field_entries.items()
+        }
+
+    def _validate_required_fields(self):
+        for field in self._get_selected_template_fields():
+            if not field.get("required", False):
+                continue
+
+            name = field["name"]
+            entry = self.field_entries.get(name)
+
+            if entry is None:
+                continue
+
+            if not entry.get().strip():
+                return field["label"]
+
+        return None
+
+    def _get_selected_template_fields(self):
+        template = self.templates_by_name.get(
+            self.template_selector.get()
+        )
+
+        if template is None:
+            return []
+
+        return self._get_template_fields(template)
+
+    # =========================================================
+    # PREVIEW
+    # =========================================================
 
     def _cancel_preview_job(self):
         # Unieważniamy również zadania, które już nie powinny
@@ -401,7 +588,10 @@ class PrintView(ctk.CTkFrame):
         if self._destroyed:
             return
 
-        if generation is not None and generation != self._preview_generation:
+        if (
+            generation is not None
+            and generation != self._preview_generation
+        ):
             return
 
         template = self.templates_by_name.get(
@@ -411,13 +601,13 @@ class PrintView(ctk.CTkFrame):
         if template is None:
             return
 
-        values = {
-            name: entry.get()
-            for name, entry in self.field_entries.items()
-        }
+        values = self._get_current_values()
 
         try:
-            zpl = self.zpl_service.generate(template, values)
+            zpl = self.zpl_service.generate(
+                template,
+                values,
+            )
 
             image = self.preview_service.generate_preview(
                 zpl,
@@ -461,12 +651,11 @@ class PrintView(ctk.CTkFrame):
             if self._destroyed:
                 return
 
-            # Zachowujemy referencje do poprzednich obrazów.
-            # Czyścimy widżet, ale nie niszczymy zasobu obrazu
-            # podczas aktualizacji GUI.
             self.preview_label.configure(
-                text="Nie można wygenerować podglądu.\n"
-                     "Sprawdź wprowadzone dane.",
+                text=(
+                    "Nie można wygenerować podglądu.\n"
+                    "Sprawdź wprowadzone dane."
+                ),
             )
 
             self.preview_status.configure(
@@ -474,14 +663,9 @@ class PrintView(ctk.CTkFrame):
                 text_color="#F08080",
             )
 
-    def _on_destroy(self, event=None):
-        # Zdarzenie Destroy jest wysyłane również dla dzieci,
-        # dlatego reagujemy tylko na zniszczenie tego widoku.
-        if event is not None and event.widget is not self:
-            return
-
-        self._destroyed = True
-        self._cancel_preview_job()
+    # =========================================================
+    # PRINTING
+    # =========================================================
 
     def _print_label(self):
         template = self.templates_by_name.get(
@@ -509,13 +693,28 @@ class PrintView(ctk.CTkFrame):
 
         quantity = int(quantity_text)
 
+        # Sprawdzamy pola wymagane.
+        missing_field = self._validate_required_fields()
+
+        if missing_field:
+            messagebox.showwarning(
+                "Brak wymaganych danych",
+                f"Uzupełnij wymagane pole:\n\n{missing_field}",
+                parent=self,
+            )
+            return
+
         values = {
             name: entry.get().strip()
             for name, entry in self.field_entries.items()
         }
 
         try:
-            zpl = self.zpl_service.generate(template, values)
+            zpl = self.zpl_service.generate(
+                template,
+                values,
+            )
+
         except (ValueError, TypeError) as error:
             messagebox.showwarning(
                 "Nieprawidłowe dane",
@@ -526,8 +725,10 @@ class PrintView(ctk.CTkFrame):
 
         confirmed = messagebox.askyesno(
             "Potwierdź drukowanie",
-            f"Czy wydrukować {quantity} "
-            f"{'kopię' if quantity == 1 else 'kopii'} etykiety?",
+            (
+                f"Czy wydrukować {quantity} "
+                f"{'kopię' if quantity == 1 else 'kopii'} etykiety?"
+            ),
             parent=self,
         )
 
@@ -552,9 +753,11 @@ class PrintView(ctk.CTkFrame):
 
             messagebox.showinfo(
                 "Wysyłanie zakończone",
-                f"Wysłano do drukarki Citizen zadanie "
-                f"na {quantity} etykiet.\n\n"
-                "Sprawdź fizyczny wydruk.",
+                (
+                    "Wysłano do drukarki Citizen zadanie "
+                    f"na {quantity} etykiet.\n\n"
+                    "Sprawdź fizyczny wydruk."
+                ),
                 parent=self,
             )
 
@@ -571,5 +774,20 @@ class PrintView(ctk.CTkFrame):
             )
 
         finally:
-            self.print_button.configure(state="normal")
+            self.print_button.configure(
+                state="normal",
+            )
             self._on_quantity_changed()
+
+    # =========================================================
+    # CLEANUP
+    # =========================================================
+
+    def _on_destroy(self, event=None):
+        # Zdarzenie Destroy jest wysyłane również dla dzieci,
+        # dlatego reagujemy tylko na zniszczenie tego widoku.
+        if event is not None and event.widget is not self:
+            return
+
+        self._destroyed = True
+        self._cancel_preview_job()

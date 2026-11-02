@@ -1,84 +1,256 @@
+
 import json
+import math
 import re
+import shutil
 from pathlib import Path
 
-"""Loads and verifies label templates saved in JSON"""
+from config import (
+    get_templates_dir,
+    get_bundled_templates_dir,
+)
+
+
 class TemplateService:
-
     def __init__(self, templates_dir=None):
-        if templates_dir is None:
-            project_dir = Path(__file__).resolve().parent.parent
-            templates_dir = project_dir / "templates"
-        self.templates_dir = Path(templates_dir)
+        self.templates_dir = Path(
+            templates_dir or get_templates_dir()
+        )
 
+        self.templates_dir.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        self._migrate_templates()
+
+    def _migrate_templates(self):
+        """
+        Kopiuje szablony z katalogu aplikacji do katalogu użytkownika.
+
+        Istniejące pliki użytkownika nigdy nie są nadpisywane.
+        """
+
+        source_dir = get_bundled_templates_dir()
+
+        if not source_dir.is_dir():
+            return
+
+        for source_file in source_dir.glob("*.json"):
+            destination = self.templates_dir / source_file.name
+
+            if destination.exists():
+                continue
+
+            try:
+                shutil.copy2(source_file, destination)
+            except OSError as error:
+                print(
+                    f"Nie udało się skopiować szablonu "
+                    f"{source_file.name}: {error}"
+                )
 
     def load_templates(self):
         if not self.templates_dir.is_dir():
-            raise FileNotFoundError(
-                f"Nie znaleziono folderu szablonów: {self.templates_dir}"
+            self.templates_dir.mkdir(
+                parents=True,
+                exist_ok=True,
             )
 
         templates = []
 
-        for file_path in sorted(self.templates_dir.glob("*.json")):
+        for file_path in sorted(
+            self.templates_dir.glob("*.json")
+        ):
             try:
-                with file_path.open("r", encoding="utf-8") as file:
+                with file_path.open(
+                    "r",
+                    encoding="utf-8",
+                ) as file:
                     template = json.load(file)
 
                 self._validate_template(template)
+
                 template["_file"] = file_path.name
                 templates.append(template)
 
             except (json.JSONDecodeError, ValueError) as error:
-                print(f"Błąd szablonu '{file_path.name}': {error}")
+                print(
+                    f"Błąd szablonu '{file_path.name}': {error}"
+                )
 
         return templates
-
 
     def get_template_by_id(self, template_id):
         for template in self.load_templates():
             if template["id"] == template_id:
                 return template
+
         return None
+
+    def save_template(self, template, overwrite=False):
+        """
+        Zapisuje szablon JSON.
+
+        Jeżeli istnieje szablon o tej samej nazwie lub ID,
+        wymaga jawnego potwierdzenia przez overwrite=True.
+        """
+
+        self._validate_template(template)
+
+        existing_by_id = None
+        existing_by_name = None
+
+        for existing in self.load_templates():
+            if existing.get("id") == template.get("id"):
+                existing_by_id = existing
+
+            existing_name = existing.get("name", "").strip().casefold()
+            new_name = template["name"].strip().casefold()
+
+            if existing_name == new_name:
+                existing_by_name = existing
+
+        existing = existing_by_id or existing_by_name
+
+        if existing is not None:
+            if not overwrite:
+                raise FileExistsError(
+                    f"Szablon '{existing['name']}' już istnieje."
+                )
+
+            filename = (
+                existing.get("_file")
+                or self._make_filename(existing["id"])
+            )
+
+            # Zachowujemy identyfikator istniejącego szablonu.
+            template["id"] = existing["id"]
+
+        else:
+            filename = self._make_filename(template["id"])
+
+        file_path = self.templates_dir / filename
+
+        data = {
+            key: value
+            for key, value in template.items()
+            if key != "_file"
+        }
+
+        with file_path.open(
+            "w",
+            encoding="utf-8",
+        ) as file:
+            json.dump(
+                data,
+                file,
+                ensure_ascii=False,
+                indent=4,
+            )
+
+        return file_path
+
+    @staticmethod
+    def _make_filename(template_id):
+        """
+        Tworzy bezpieczną nazwę pliku na podstawie ID.
+        """
+
+        filename = re.sub(
+            r"[^a-zA-Z0-9_-]",
+            "_",
+            template_id,
+        )
+
+        if not filename:
+            raise ValueError(
+                "Nieprawidłowy identyfikator szablonu."
+            )
+
+        return f"{filename}.json"
+
+    @staticmethod
+    def _validate_number(value, description, minimum=None):
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+        ):
+            raise ValueError(
+                f"{description} musi być prawidłową liczbą."
+            )
+
+        if minimum is not None and value < minimum:
+            raise ValueError(
+                f"{description} musi wynosić co najmniej {minimum}."
+            )
 
     @staticmethod
     def _validate_template(template):
         if not isinstance(template, dict):
-            raise ValueError("Główna zawartość JSON musi być obiektem")
-        
+            raise ValueError(
+                "Główna zawartość JSON musi być obiektem."
+            )
+
         required_keys = {
             "id",
             "name",
             "width",
             "height",
-            "fields",
-            "zpl",
         }
 
         missing_keys = required_keys - template.keys()
 
         if missing_keys:
-            raise ValueError(f"Brak wymaganych kluczy:, ".join(sorted(missing_keys)))
+            raise ValueError(
+                "Brak wymaganych kluczy: "
+                + ", ".join(sorted(missing_keys))
+            )
 
-        for key in ("id", "name", "zpl"):
+        for key in ("id", "name"):
             value = template[key]
 
             if not isinstance(value, str) or not value.strip():
-                raise ValueError(f"Pole {key} musi być niepustym tekstem")
-
-        for key in ("width", "height"):
-            value = template[key]
-
-            if (
-                isinstance(value, bool)
-                or not isinstance(value, (int, float))
-                or value <= 0
-            ):
                 raise ValueError(
-                    f"Pole '{key}' musi być liczbą większą od zera."
+                    f"Pole '{key}' musi być niepustym tekstem."
                 )
 
-        if not isinstance(template["fields"], list):
+        for key in ("width", "height"):
+            TemplateService._validate_number(
+                template[key],
+                f"Pole '{key}'",
+                minimum=0.001,
+            )
+
+        # Starszy format: gotowy kod ZPL i lista pól.
+        if "zpl" in template:
+            TemplateService._validate_legacy_template(template)
+            return
+
+        # Nowy format: graficzne elementy szablonu.
+        if template.get("version") == 2:
+            TemplateService._validate_graphic_template(template)
+            return
+
+        raise ValueError(
+            "Szablon musi zawierać pole 'zpl' "
+            "lub mieć version=2."
+        )
+
+    @staticmethod
+    def _validate_legacy_template(template):
+        if not isinstance(template["zpl"], str):
+            raise ValueError(
+                "Pole 'zpl' musi być tekstem."
+            )
+
+        if not template["zpl"].strip():
+            raise ValueError(
+                "Kod ZPL nie może być pusty."
+            )
+
+        if not isinstance(template.get("fields"), list):
             raise ValueError(
                 "Pole 'fields' musi być listą."
             )
@@ -94,13 +266,9 @@ class TemplateService:
             name = field.get("name")
             label = field.get("label")
 
-            if not isinstance(name, str) or not name.strip():
-                raise ValueError(
-                    "Każde pole musi mieć niepustą nazwę."
-                )
-
-            if not re.fullmatch(
-                r"[a-zA-Z_][a-zA-Z0-9_]*", name
+            if not isinstance(name, str) or not re.fullmatch(
+                r"[a-zA-Z_][a-zA-Z0-9_]*",
+                name,
             ):
                 raise ValueError(
                     f"Nieprawidłowa nazwa pola: '{name}'."
@@ -118,23 +286,6 @@ class TemplateService:
                     f"Pole '{name}' musi mieć etykietę."
                 )
 
-            if (
-                "default" in field
-                and not isinstance(field["default"], str)
-            ):
-                raise ValueError(
-                    f"'default' pola '{name}' musi być tekstem."
-                )
-
-            if (
-                "required" in field
-                and not isinstance(field["required"], bool)
-            ):
-                raise ValueError(
-                    f"'required' pola '{name}' musi być wartością bool."
-                )
-
-        # Sprawdzenie, czy wszystkie zmienne ZPL mają definicje.
         placeholders = set(
             re.findall(
                 r"\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}",
@@ -148,4 +299,227 @@ class TemplateService:
             raise ValueError(
                 "ZPL odwołuje się do niezdefiniowanych pól: "
                 + ", ".join(sorted(undefined_fields))
-            )  
+            )
+
+    @staticmethod
+    def _validate_graphic_template(template):
+        if not isinstance(template.get("fields", []), list):
+            raise ValueError(
+                "Pole 'fields' musi być listą."
+            )
+
+        elements = template.get("elements")
+
+        if not isinstance(elements, list):
+            raise ValueError(
+                "Szablon graficzny musi zawierać listę 'elements'."
+            )
+
+        supported_types = {
+            "text",
+            "data",
+            "barcode",
+            "qr",
+            "rectangle",
+            "line",
+        }
+
+        data_names = set()
+
+        for index, element in enumerate(elements):
+            element_number = index + 1
+
+            if not isinstance(element, dict):
+                raise ValueError(
+                    f"Element {element_number} musi być obiektem."
+                )
+
+            element_type = element.get("type")
+
+            if element_type not in supported_types:
+                raise ValueError(
+                    f"Nieobsługiwany typ elementu: {element_type}."
+                )
+
+            for coordinate in ("x", "y"):
+                TemplateService._validate_number(
+                    element.get(coordinate),
+                    f"Element {element_number}: współrzędna {coordinate}",
+                    minimum=0,
+                )
+
+            if element_type == "text":
+                TemplateService._validate_text_element(
+                    element,
+                    element_number,
+                )
+
+            elif element_type == "data":
+                TemplateService._validate_data_element(
+                    element,
+                    element_number,
+                    data_names,
+                )
+
+            elif element_type == "barcode":
+                TemplateService._validate_barcode_element(
+                    element,
+                    element_number,
+                )
+
+            elif element_type == "qr":
+                TemplateService._validate_qr_element(
+                    element,
+                    element_number,
+                )
+
+            elif element_type == "rectangle":
+                TemplateService._validate_rectangle_element(
+                    element,
+                    element_number,
+                )
+
+            elif element_type == "line":
+                TemplateService._validate_line_element(
+                    element,
+                    element_number,
+                )
+
+    @staticmethod
+    def _validate_text_element(element, index):
+        content = element.get("content", "")
+
+        if not isinstance(content, str):
+            raise ValueError(
+                f"Element {index}: treść tekstu musi być tekstem."
+            )
+
+        TemplateService._validate_text_properties(
+            element,
+            index,
+        )
+
+    @staticmethod
+    def _validate_data_element(element, index, used_names):
+        """
+        Waliduje dowolne pole danych zdefiniowane przez użytkownika.
+
+        Nie korzysta z żadnego globalnego rejestru pól.
+        """
+
+        name = element.get("name")
+        label = element.get("label")
+        sample = element.get("sample", "")
+        required = element.get("required", False)
+
+        if not isinstance(name, str) or not re.fullmatch(
+            r"[a-zA-Z_][a-zA-Z0-9_]*",
+            name,
+        ):
+            raise ValueError(
+                f"Element {index}: nieprawidłowy identyfikator pola danych."
+            )
+
+        if name in used_names:
+            raise ValueError(
+                f"Element {index}: powtórzona nazwa pola danych '{name}'."
+            )
+
+        used_names.add(name)
+
+        if not isinstance(label, str) or not label.strip():
+            raise ValueError(
+                f"Element {index}: pole danych musi mieć etykietę."
+            )
+
+        if not isinstance(sample, str):
+            raise ValueError(
+                f"Element {index}: wartość przykładowa musi być tekstem."
+            )
+
+        if not isinstance(required, bool):
+            raise ValueError(
+                f"Element {index}: właściwość 'required' musi być wartością logiczną."
+            )
+
+        TemplateService._validate_text_properties(
+            element,
+            index,
+        )
+
+    @staticmethod
+    def _validate_text_properties(element, index):
+        rotation = element.get("rotation", "N")
+
+        if rotation not in ("N", "R", "I", "B"):
+            raise ValueError(
+                f"Element {index}: nieprawidłowy obrót tekstu."
+            )
+
+        for property_name in ("font_size", "font_width"):
+            TemplateService._validate_number(
+                element.get(property_name, 3),
+                f"Element {index}: {property_name}",
+                minimum=0.001,
+            )
+
+        if "width" in element:
+            TemplateService._validate_number(
+                element["width"],
+                f"Element {index}: szerokość pola",
+                minimum=0.001,
+            )
+
+    @staticmethod
+    def _validate_barcode_element(element, index):
+        content = element.get("content", "")
+
+        if not isinstance(content, str):
+            raise ValueError(
+                f"Element {index}: dane kodu kreskowego muszą być tekstem."
+            )
+
+        TemplateService._validate_number(
+            element.get("height", 15),
+            f"Element {index}: wysokość kodu kreskowego",
+            minimum=0.001,
+        )
+
+        TemplateService._validate_number(
+            element.get("module_width", 2),
+            f"Element {index}: szerokość modułu",
+            minimum=1,
+        )
+
+    @staticmethod
+    def _validate_qr_element(element, index):
+        content = element.get("content", "")
+
+        if not isinstance(content, str):
+            raise ValueError(
+                f"Element {index}: dane kodu QR muszą być tekstem."
+            )
+
+        TemplateService._validate_number(
+            element.get("magnification", 5),
+            f"Element {index}: powiększenie kodu QR",
+            minimum=1,
+        )
+
+    @staticmethod
+    def _validate_rectangle_element(element, index):
+        for property_name in ("width", "height", "thickness"):
+            TemplateService._validate_number(
+                element.get(property_name),
+                f"Element {index}: {property_name}",
+                minimum=0.001,
+            )
+
+    @staticmethod
+    def _validate_line_element(element, index):
+        for property_name in ("length", "thickness"):
+            TemplateService._validate_number(
+                element.get(property_name),
+                f"Element {index}: {property_name}",
+                minimum=0.001,
+            )

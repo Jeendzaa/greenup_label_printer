@@ -1,0 +1,56 @@
+{
+    "version": 2,
+    "id": "graphic_test",
+    "name": "Test edytora graficznego",
+    "description": "Pierwszy szablon w nowym formacie",
+    "width": 75,
+    "height": 49,
+    "fields": [
+        {
+            "name": "product",
+            "label": "Nazwa produktu",
+            "default": "GREENUP",
+            "required": true
+        },
+        {
+            "name": "batch",
+            "label": "Numer partii",
+            "default": "00/00/W/000003",
+            "required": true
+        }
+    ],
+    "elements": [
+        {
+            "type": "text",
+            "x": 3,
+            "y": 3,
+            "content": "{{product}}",
+            "font_size": 4,
+            "font_width": 4
+        },
+        {
+            "type": "line",
+            "x": 3,
+            "y": 10,
+            "length": 69,
+            "thickness": 0.3
+        },
+        {
+            "type": "text",
+            "x": 3,
+            "y": 13,
+            "content": "Numer partii: {{batch}}",
+            "font_size": 3,
+            "font_width": 3,
+            "width": 68
+        },
+        {
+            "type": "barcode",
+            "x": 3,
+            "y": 25,
+            "content": "{{batch}}",
+            "height": 15,
+            "module_width": 2
+        }
+    ]
+}
