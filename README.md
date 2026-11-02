@@ -1,29 +1,46 @@
-# Citizen Label Printer
+# GreenUp Label Printer
 
-A desktop application for designing, managing, and printing labels on Citizen label printers. The application aims to simplify everyday label printing by providing both a graphical interface for label creation and direct support for ZPL commands.
+**A desktop application for designing, previewing and printing labels using Citizen label printers.**
+
+<p align="center">
+  <img src="assets/greenup_label_printer_icon.png" width="120" alt="GreenUp Label Printer Logo">
+</p>
+
+<p align="center">
+  <strong>Design. Preview. Print.</strong>
+</p>
+
+
+## Overview
+
+GreenUp Label Printer is a Windows desktop application developed to simplify label creation and printing.
+
+It provides two approaches to label design: a graphical template editor and a direct ZPL editor. Both offer a preview before sending the print job to the printer.
+
+The application is designed to work with network-connected Citizen label printers.
 
 ## Features
 
-- **Print from Templates** — Load predefined label templates, enter the required data, and print labels quickly.
-- **Graphical Label Designer** — Create labels visually by arranging and configuring their elements through a graphical interface.
-- **Save and Reuse Templates** — Save custom label designs as templates for future use.
-- **Direct ZPL Printing** — Write or paste ZPL code and send it directly to the printer without using the graphical designer.
-- **Citizen Printer Support** — Designed for use with Citizen label printers connected to the local network.
+### Graphical Template Editor
+- Create labels using a visual editor.
+- Add and position text, barcodes, QR codes, rectangles and lines.
+- Configure element properties and dimensions.
+- Use dynamic data fields.
+- Save and reuse custom templates.
 
-## Purpose
+### ZPL Editor
+- Write and edit ZPL commands directly.
+- Preview ZPL labels before printing.
+- Generate labels using custom ZPL code.
 
-The application is intended to streamline label printing within the company by combining reusable templates, visual label design, and direct ZPL command execution in one place.
+### Print Management
+- Print directly to a network-connected printer.
+- Communicate over TCP/IP.
+- Configure printer connection settings.
+- Print using graphical templates or custom ZPL.
 
-## Technologies
-
-- Python
-- CustomTkinter
-- ZPL (Zebra Programming Language)
-
-## Project Status
-
-Currently under development. Features and implementation details may change as the project evolves.
-
-## License
-
-Internal company software. Distribution and licensing terms to be determined.
+### Template Management
+- Store templates locally.
+- Create and edit custom templates.
+- Reuse templates without modifying the application installation.
+- Keep user templates
