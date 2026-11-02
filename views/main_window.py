@@ -1,10 +1,10 @@
-
 import customtkinter as ctk
+
+from pathlib import Path
 
 from views.print_view import PrintView
 from views.template_editor import TemplateEditorView
 from views.zpl_view import ZPLView
-from pathlib import Path
 
 
 class MainWindow(ctk.CTk):
@@ -272,6 +272,11 @@ class MainWindow(ctk.CTk):
             view.grid_remove()
 
         self.views[view_id].grid()
+
+        # Odświeżamy listę szablonów przy każdym wejściu
+        # do zakładki drukowania.
+        if view_id == "druk":
+            self.views["druk"].refresh_templates()
 
         titles = {
             "druk": "Drukuj etykietę",
