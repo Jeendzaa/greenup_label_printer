@@ -6,7 +6,6 @@ from views.print_view import PrintView
 from views.template_editor import TemplateEditorView
 from views.zpl_view import ZPLView
 
-
 class MainWindow(ctk.CTk):
     def __init__(
         self,
@@ -32,8 +31,8 @@ class MainWindow(ctk.CTk):
         ctk.set_default_color_theme("blue")
 
         self.title("GreenUp! Label Printer")
-        self.geometry("1100x700")
         self.minsize(900, 600)
+        self.after(0, self.state, "zoomed")
 
         self.sidebar_color = "#18212B"
         self.main_color = "#222D38"

@@ -3,6 +3,7 @@ import json
 import math
 import re
 import shutil
+import uuid
 from pathlib import Path
 
 from config import (
@@ -49,6 +50,43 @@ class TemplateService:
                     f"Nie udało się skopiować szablonu "
                     f"{source_file.name}: {error}"
                 )
+
+    def import_template_image(self, source_path):
+        """
+        Kopiuje obraz do katalogu zasobów szablonów i zwraca
+        ścieżkę względną, którą można zapisać w JSON.
+
+        Zasoby są przechowywane w templates/_assets/, dzięki czemu
+        nie zależą od lokalizacji pliku źródłowego.
+        """
+        source = Path(source_path)
+
+        allowed_extensions = {".png", ".jpg", ".jpeg", ".bmp"}
+
+        if not source.is_file():
+            raise FileNotFoundError(
+                f"Nie znaleziono pliku obrazu: {source}"
+            )
+
+        if source.suffix.lower() not in allowed_extensions:
+            raise ValueError(
+                "Obsługiwane formaty obrazów: PNG, JPG, JPEG i BMP."
+            )
+
+        asset_id = uuid.uuid4().hex
+        asset_dir = self.templates_dir / "_assets" / asset_id
+        asset_dir.mkdir(parents=True, exist_ok=True)
+
+        filename = f"image{source.suffix.lower()}"
+        destination = asset_dir / filename
+
+        try:
+            shutil.copy2(source, destination)
+        except OSError:
+            shutil.rmtree(asset_dir, ignore_errors=True)
+            raise
+
+        return (Path("_assets") / asset_id / filename).as_posix()
 
     def load_templates(self):
         if not self.templates_dir.is_dir():
@@ -322,6 +360,7 @@ class TemplateService:
             "qr",
             "rectangle",
             "line",
+            "image",
         }
 
         data_names = set()
@@ -381,6 +420,12 @@ class TemplateService:
 
             elif element_type == "line":
                 TemplateService._validate_line_element(
+                    element,
+                    element_number,
+                )
+
+            elif element_type == "image":
+                TemplateService._validate_image_element(
                     element,
                     element_number,
                 )
@@ -523,3 +568,53 @@ class TemplateService:
                 f"Element {index}: {property_name}",
                 minimum=0.001,
             )
+
+    @staticmethod
+    def _validate_image_element(element, index):
+        image_path = element.get("image")
+
+        if not isinstance(image_path, str) or not image_path.strip():
+            raise ValueError(
+                f"Element {index}: brak ścieżki do obrazu."
+            )
+
+        relative_path = Path(image_path)
+
+        if relative_path.is_absolute() or ".." in relative_path.parts:
+            raise ValueError(
+                f"Element {index}: ścieżka obrazu musi być względna "
+                "i nie może wychodzić poza katalog szablonów."
+            )
+
+        if relative_path.suffix.lower() not in {
+            ".png", ".jpg", ".jpeg", ".bmp"
+        }:
+            raise ValueError(
+                f"Element {index}: nieobsługiwany format obrazu."
+            )
+
+        for property_name in ("width", "height"):
+            TemplateService._validate_number(
+                element.get(property_name),
+                f"Element {index}: {property_name}",
+                minimum=0.001,
+            )
+
+        threshold = element.get("threshold", 128)
+        TemplateService._validate_number(
+            threshold,
+            f"Element {index}: threshold",
+            minimum=0,
+        )
+
+        if threshold > 255 or int(threshold) != threshold:
+            raise ValueError(
+                f"Element {index}: threshold musi być liczbą całkowitą 0–255."
+            )
+
+        for property_name in ("preserve_aspect_ratio", "dithering"):
+            if not isinstance(element.get(property_name, False), bool):
+                raise ValueError(
+                    f"Element {index}: {property_name} musi być wartością logiczną."
+                )
+
