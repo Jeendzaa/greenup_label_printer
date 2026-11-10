@@ -4,6 +4,15 @@ import sys
 
 APP_NAME = "GreenUpLabelPrinter"
 
+APP_VERSION = "1.1.0"
+
+GITHUB_OWNER = "Jeendzaa"
+GITHUB_REPO = "greenup_label_printer"
+
+GITHUB_API_URL = (
+    f"https://api.github.com/repos/"
+    f"{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
+)
 
 def get_documents_dir():
     """

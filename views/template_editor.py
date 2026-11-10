@@ -2,12 +2,14 @@
 import copy
 import re
 import unicodedata
+from pathlib import Path
 import tkinter as tk
-from tkinter import messagebox, simpledialog
+from tkinter import filedialog, messagebox, simpledialog
 
 import customtkinter as ctk
 from PIL import Image
 
+from services.image_service import ImageService
 from services.preview_service import PreviewService
 from services.zpl_service import ZPLService
 
@@ -57,6 +59,17 @@ class TemplateEditorView(ctk.CTkFrame):
             "length": 20,
             "thickness": 0.3,
         },
+        "image": {
+            "type": "image",
+            "x": 3,
+            "y": 3,
+            "width": 20,
+            "height": 20,
+            "preserve_aspect_ratio": True,
+            "threshold": 128,
+            "dithering": False,
+            "rotation": 0,
+        },
     }
 
     PROPERTIES = {
@@ -105,6 +118,14 @@ class TemplateEditorView(ctk.CTkFrame):
             ("length", "Długość (mm)", "float"),
             ("thickness", "Grubość (mm)", "float"),
         ],
+        "image": [
+            ("x", "X (mm)", "float"),
+            ("y", "Y (mm)", "float"),
+            ("width", "Szerokość (mm)", "float"),
+            ("height", "Wysokość (mm)", "float"),
+            ("threshold", "Próg czerni i bieli (0–255)", "int_range"),
+            ("rotation", "Obrót obrazu", "image_rotation"),
+        ],
     }
 
     ELEMENT_LABELS = {
@@ -114,6 +135,7 @@ class TemplateEditorView(ctk.CTkFrame):
         "qr": "Kod QR",
         "rectangle": "Prostokąt",
         "line": "Linia",
+        "image": "Obraz",
     }
 
     def __init__(self, parent, template_service):
@@ -125,6 +147,7 @@ class TemplateEditorView(ctk.CTkFrame):
         self.template_service = template_service
         self.zpl_service = ZPLService()
         self.preview_service = PreviewService(dpi=self.DPI)
+        self.image_service = ImageService()
 
         self.template = None
         self.selected_index = None
@@ -374,6 +397,7 @@ class TemplateEditorView(ctk.CTkFrame):
             ("+ QR", "qr"),
             ("+ Prostokąt", "rectangle"),
             ("+ Linia", "line"),
+            ("+ Obraz", "image"),
         ]
 
         for index, (label, kind) in enumerate(buttons):
@@ -836,6 +860,10 @@ class TemplateEditorView(ctk.CTkFrame):
             self._add_field()
             return
 
+        if kind == "image":
+            self._add_image()
+            return
+
         element = copy.deepcopy(
             self.DEFAULTS[kind]
         )
@@ -849,6 +877,90 @@ class TemplateEditorView(ctk.CTkFrame):
         self._refresh_elements()
         self._show_properties()
         self._schedule_preview()
+
+    def _add_image(self):
+        """Wybiera obraz i kopiuje go do zasobów szablonów."""
+
+        source_path = filedialog.askopenfilename(
+            title="Wybierz obraz etykiety",
+            filetypes=[
+                ("Pliki graficzne", "*.png *.jpg *.jpeg *.bmp"),
+                ("PNG", "*.png"),
+                ("JPEG", "*.jpg *.jpeg"),
+                ("Bitmapa", "*.bmp"),
+            ],
+            parent=self,
+        )
+
+        if not source_path:
+            return
+
+        try:
+            relative_path = self.template_service.import_template_image(
+                source_path
+            )
+
+            element = copy.deepcopy(self.DEFAULTS["image"])
+            element["image"] = relative_path
+            element["source_name"] = Path(source_path).name
+
+            self.template["elements"].append(element)
+            self.selected_index = len(self.template["elements"]) - 1
+
+            self._refresh_elements()
+            self._show_properties()
+            self._schedule_preview()
+
+            self._status(
+                f"Dodano obraz: {Path(source_path).name}. "
+                "Podgląd i druk grafiki zostaną podłączone w kolejnych etapach."
+            )
+
+        except Exception as exc:
+            messagebox.showerror(
+                "Nie można dodać obrazu",
+                str(exc),
+                parent=self,
+            )
+
+    def _replace_selected_image(self):
+        """Zastępuje plik aktualnie zaznaczonego obrazu."""
+
+        if self.selected_index is None:
+            return
+
+        element = self.template["elements"][self.selected_index]
+        if element.get("type") != "image":
+            return
+
+        source_path = filedialog.askopenfilename(
+            title="Wybierz nowy obraz",
+            filetypes=[
+                ("Pliki graficzne", "*.png *.jpg *.jpeg *.bmp"),
+                ("PNG", "*.png"),
+                ("JPEG", "*.jpg *.jpeg"),
+                ("Bitmapa", "*.bmp"),
+            ],
+            parent=self,
+        )
+
+        if not source_path:
+            return
+
+        try:
+            element["image"] = self.template_service.import_template_image(
+                source_path
+            )
+            element["source_name"] = Path(source_path).name
+            self._show_properties()
+            self._schedule_preview()
+            self._status(f"Zmieniono obraz: {Path(source_path).name}")
+        except Exception as exc:
+            messagebox.showerror(
+                "Nie można zmienić obrazu",
+                str(exc),
+                parent=self,
+            )
 
     def _add_field(self):
         """
@@ -1022,6 +1134,46 @@ class TemplateEditorView(ctk.CTkFrame):
 
         kind = element["type"]
 
+        if kind == "image":
+            self.selection_label.configure(
+                text="Element: obraz"
+            )
+
+            ctk.CTkLabel(
+                self.properties_frame,
+                text=element.get("source_name", "Obraz szablonu"),
+                text_color="#AAB7C4",
+                wraplength=215,
+                justify="left",
+            ).pack(
+                anchor="w",
+                padx=7,
+                pady=(5, 8),
+            )
+
+            ctk.CTkLabel(
+                self.properties_frame,
+                text="Plik jest kopiowany do katalogu zasobów szablonów.",
+                text_color="#AAB7C4",
+                wraplength=215,
+                justify="left",
+                font=ctk.CTkFont(size=10),
+            ).pack(
+                anchor="w",
+                padx=7,
+                pady=(0, 8),
+            )
+
+            ctk.CTkButton(
+                self.properties_frame,
+                text="Zmień obraz",
+                command=self._replace_selected_image,
+            ).pack(
+                fill="x",
+                padx=7,
+                pady=(0, 8),
+            )
+
         if kind == "data":
             self.selection_label.configure(
                 text="Element: własne pole danych"
@@ -1062,7 +1214,17 @@ class TemplateEditorView(ctk.CTkFrame):
                 pady=(7, 2),
             )
 
-            if value_type == "rotation":
+            if value_type == "image_rotation":
+                widget = ctk.CTkOptionMenu(
+                    self.properties_frame,
+                    values=["0°", "90°", "180°", "270°"],
+                    command=lambda value, k=key: self._set_property(
+                        k, int(value.replace("°", ""))
+                    ),
+                )
+                widget.set(f"{int(element.get(key, 0))}°")
+
+            elif value_type == "rotation":
                 widget = ctk.CTkOptionMenu(
                     self.properties_frame,
                     values=["N", "R", "I", "B"],
@@ -1102,6 +1264,56 @@ class TemplateEditorView(ctk.CTkFrame):
                 fill="x",
                 padx=7,
                 pady=(0, 2),
+            )
+
+        if kind == "image":
+            aspect_var = tk.BooleanVar(
+                value=element.get("preserve_aspect_ratio", True)
+            )
+
+            ctk.CTkCheckBox(
+                self.properties_frame,
+                text="Zachowaj proporcje",
+                variable=aspect_var,
+                command=lambda v=aspect_var: self._set_property(
+                    "preserve_aspect_ratio",
+                    bool(v.get()),
+                ),
+            ).pack(
+                anchor="w",
+                padx=7,
+                pady=(10, 5),
+            )
+
+            dithering_var = tk.BooleanVar(
+                value=element.get("dithering", False)
+            )
+
+            ctk.CTkCheckBox(
+                self.properties_frame,
+                text="Dithering",
+                variable=dithering_var,
+                command=lambda v=dithering_var: self._set_property(
+                    "dithering",
+                    bool(v.get()),
+                ),
+            ).pack(
+                anchor="w",
+                padx=7,
+                pady=5,
+            )
+
+            ctk.CTkLabel(
+                self.properties_frame,
+                text="Konwersja i podgląd obrazu zostaną aktywowane w kolejnym etapie.",
+                text_color="#AAB7C4",
+                wraplength=215,
+                justify="left",
+                font=ctk.CTkFont(size=10),
+            ).pack(
+                anchor="w",
+                padx=7,
+                pady=8,
             )
 
         if kind == "data":
@@ -1184,6 +1396,14 @@ class TemplateEditorView(ctk.CTkFrame):
                         "Wartość musi być większa od zera."
                     )
 
+            elif value_type == "int_range":
+                value = int(raw)
+
+                if not 0 <= value <= 255:
+                    raise ValueError(
+                        "Wartość musi mieścić się w zakresie 0–255."
+                    )
+
             else:
                 value = raw
 
@@ -1233,67 +1453,117 @@ class TemplateEditorView(ctk.CTkFrame):
         try:
             self._apply_dimensions()
 
-            # New custom data elements use their own sample values.
             values = {
                 element["name"]: element.get("sample", "")
                 for element in self.template.get("elements", [])
                 if element.get("type") == "data"
             }
 
-            # Compatibility with older graphic templates
-            # that stored fields in the separate "fields" list.
+            # Starszy format szablonów może przechowywać pola osobno.
             for field in self.template.get("fields", []):
                 if not isinstance(field, dict):
                     continue
-
                 name = field.get("name")
-
                 if name and name not in values:
                     values[name] = field.get("default", "")
 
-            zpl = self.zpl_service.generate(
-                self.template,
-                values,
-            )
+            # Renderer ZPL obsługuje na tym etapie wszystkie elementy
+            # poza obrazami. Obrazy nakładamy na gotowy podgląd jako
+            # osobną warstwę bitmapową.
+            preview_template = copy.deepcopy(self.template)
+            preview_template["elements"] = [
+                element
+                for element in preview_template.get("elements", [])
+                if element.get("type") != "image"
+            ]
 
+            zpl = self.zpl_service.generate(preview_template, values)
             image = self.preview_service.generate_preview(
                 zpl,
                 self.template["width"],
                 self.template["height"],
             )
 
-            image.thumbnail(
-                (650, 450),
-                Image.Resampling.LANCZOS,
-            )
+            self._overlay_images_on_preview(image)
 
+            image.thumbnail((650, 450), Image.Resampling.LANCZOS)
             self.preview_image = ctk.CTkImage(
                 light_image=image,
                 dark_image=image,
                 size=image.size,
             )
+            self.preview_label.configure(image=self.preview_image, text="")
 
-            self.preview_label.configure(
-                image=self.preview_image,
-                text="",
+            image_count = sum(
+                1 for element in self.template.get("elements", [])
+                if element.get("type") == "image"
             )
-
-            self._status(
+            status = (
                 f"Podgląd | {self.template['width']} × "
                 f"{self.template['height']} mm | 203 DPI"
             )
+            if image_count:
+                status += f" | obrazy: {image_count}"
+            self._status(status)
 
         except Exception as exc:
             self.preview_image = None
-
             self.preview_label.configure(
                 image=None,
                 text=f"Nie można wygenerować podglądu:\n{exc}",
             )
-
             self._status(
                 "Podgląd niedostępny — sprawdź właściwości elementów."
             )
+
+    def _overlay_images_on_preview(self, preview):
+        """Nakłada czarne piksele obrazów na bazowy podgląd etykiety."""
+
+        templates_dir = Path(self.template_service.templates_dir).resolve()
+        for element in self.template.get("elements", []):
+            if element.get("type") != "image":
+                continue
+
+            relative_path = element.get("image")
+            if not relative_path:
+                raise ValueError("Element obrazu nie ma wskazanego pliku.")
+
+            asset_path = (templates_dir / relative_path).resolve()
+            try:
+                asset_path.relative_to(templates_dir)
+            except ValueError as error:
+                raise ValueError(
+                    "Ścieżka obrazu wychodzi poza katalog zasobów szablonów."
+                ) from error
+
+            width_dots = self._mm_to_dots(element.get("width", 20))
+            height_dots = self._mm_to_dots(element.get("height", 20))
+            x_dots = self._mm_to_dots(element.get("x", 0))
+            y_dots = self._mm_to_dots(element.get("y", 0))
+
+            prepared = self.image_service.load_and_prepare(
+                asset_path,
+                width_dots,
+                height_dots,
+                preserve_aspect_ratio=element.get(
+                    "preserve_aspect_ratio", True
+                ),
+                threshold=element.get("threshold", 128),
+                dithering=element.get("dithering", False),
+                rotation=element.get("rotation", 0),
+            )
+
+            # Białe piksele bitmapy oznaczają brak nadruku. Dzięki temu
+            # obraz nie zasłania elementów znajdujących się pod nim.
+            black_mask = prepared.point(
+                lambda pixel: 255 if pixel == 0 else 0,
+                mode="L",
+            )
+            preview.paste((0, 0, 0), (x_dots, y_dots), black_mask)
+
+    @staticmethod
+    def _mm_to_dots(value):
+        return round(float(value) * 203 / 25.4)
 
     # =========================================================
     # HELPERS

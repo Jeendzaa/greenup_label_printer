@@ -1,5 +1,9 @@
 
 import re
+from pathlib import Path
+
+from config import get_templates_dir
+from services.image_service import ImageService
 
 
 class ZPLService:
@@ -8,6 +12,10 @@ class ZPLService:
     )
 
     DPI = 203
+
+    def __init__(self, templates_dir=None, image_service=None):
+        self.templates_dir = Path(templates_dir or get_templates_dir()).resolve()
+        self.image_service = image_service or ImageService()
 
     def generate(self, template, values):
         self._validate_values(template, values)
@@ -133,8 +141,73 @@ class ZPLService:
                 y,
             )
 
+        if element_type == "image":
+            return self._generate_image(
+                element,
+                x,
+                y,
+            )
+
         raise ValueError(
             f"Nieobsługiwany element: {element_type}"
+        )
+
+    # =========================================================
+    # IMAGE
+    # =========================================================
+
+    def _generate_image(self, element, x, y):
+        """Generuje obraz monochromatyczny w formacie ZPL ^GFA."""
+        relative_path = element.get("image")
+        if not isinstance(relative_path, str) or not relative_path.strip():
+            raise ValueError("Element obrazu nie zawiera ścieżki pliku.")
+
+        image_path = (self.templates_dir / relative_path).resolve()
+        try:
+            image_path.relative_to(self.templates_dir)
+        except ValueError as error:
+            raise ValueError("Ścieżka obrazu wychodzi poza katalog szablonów.") from error
+
+        if not image_path.is_file():
+            raise FileNotFoundError(f"Nie znaleziono obrazu szablonu: {image_path}")
+
+        width_dots = self._mm_to_dots(element.get("width", 20))
+        height_dots = self._mm_to_dots(element.get("height", 20))
+        if width_dots < 1 or height_dots < 1:
+            raise ValueError("Wymiary obrazu po przeliczeniu na punkty drukarki są zbyt małe.")
+
+        bitmap = self.image_service.load_and_prepare(
+            image_path=image_path,
+            width_dots=width_dots,
+            height_dots=height_dots,
+            preserve_aspect_ratio=element.get("preserve_aspect_ratio", True),
+            threshold=element.get("threshold", 128),
+            dithering=element.get("dithering", False),
+            rotation=element.get("rotation", 0),
+        )
+
+        # W PIL mode "1": 1 = biały, 0 = czarny.
+        # W ZPL: 1 = czarny punkt, 0 = biały.
+        row_bytes = (bitmap.width + 7) // 8
+        raw = bitmap.tobytes()
+        packed = bytearray(raw)
+
+        for index in range(len(packed)):
+            packed[index] ^= 0xFF
+
+        # Wyzeruj bity dopełniające poza prawą krawędzią bitmapy.
+        remainder = bitmap.width % 8
+        if remainder:
+            padding_mask = (0xFF << (8 - remainder)) & 0xFF
+            for row in range(bitmap.height):
+                packed[row * row_bytes + row_bytes - 1] &= padding_mask
+
+        total_bytes = row_bytes * bitmap.height
+        hex_data = packed.hex().upper()
+
+        return (
+            f"^FO{x},{y}"
+            f"^GFA,{total_bytes},{total_bytes},{row_bytes},{hex_data}^FS"
         )
 
     # =========================================================
