@@ -1,10 +1,19 @@
+import os
+import subprocess
+import sys
+import threading
+from pathlib import Path
+from tkinter import messagebox
+
 import customtkinter as ctk
 
-from pathlib import Path
-
+from config import APP_VERSION
+from services.download_service import DownloadService
+from services.update_service import UpdateService
 from views.print_view import PrintView
 from views.template_editor import TemplateEditorView
 from views.zpl_view import ZPLView
+
 
 class MainWindow(ctk.CTk):
     def __init__(
@@ -21,11 +30,17 @@ class MainWindow(ctk.CTk):
             / "greenup_label_printer_icon.ico"
         )
 
-        self.iconbitmap(str(icon_path))
+        if icon_path.is_file():
+            self.iconbitmap(str(icon_path))
 
         self.template_service = template_service
         self.zpl_service = zpl_service
         self.printer_service = printer_service
+
+        # Usługi aktualizacji.
+        self.update_service = UpdateService()
+        self.download_service = DownloadService()
+        self.update_in_progress = False
 
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
@@ -52,6 +67,9 @@ class MainWindow(ctk.CTk):
         self._create_views()
 
         self.show_view("druk")
+
+        # Ciche sprawdzenie aktualizacji po uruchomieniu GUI.
+        self.after(1500, self._automatic_update_check)
 
     def _create_workspace(self):
         """Tworzy obszar roboczy z menu i panelem treści."""
@@ -132,6 +150,7 @@ class MainWindow(ctk.CTk):
 
             self.menu_buttons[view_id] = button
 
+        # Elementy dolnej części sidebara.
         exit_button = ctk.CTkButton(
             self.sidebar,
             text="Zamknij program",
@@ -145,7 +164,36 @@ class MainWindow(ctk.CTk):
             side="bottom",
             fill="x",
             padx=12,
-            pady=18,
+            pady=(8, 18),
+        )
+
+        self.update_button = ctk.CTkButton(
+            self.sidebar,
+            text="Sprawdź aktualizacje",
+            height=40,
+            corner_radius=8,
+            fg_color="#27845B",
+            hover_color="#206B49",
+            command=self.check_for_updates,
+        )
+        self.update_button.pack(
+            side="bottom",
+            fill="x",
+            padx=12,
+            pady=6,
+        )
+
+        self.version_label = ctk.CTkLabel(
+            self.sidebar,
+            text=f"Wersja {APP_VERSION}",
+            text_color=self.muted_color,
+            font=ctk.CTkFont(size=11),
+        )
+        self.version_label.pack(
+            side="bottom",
+            anchor="w",
+            padx=18,
+            pady=(6, 4),
         )
 
     def _create_main_area(self):
@@ -296,3 +344,259 @@ class MainWindow(ctk.CTk):
                     fg_color="transparent",
                     hover_color="#2B3947",
                 )
+
+    # =========================================================
+    # UPDATE SYSTEM
+    # =========================================================
+
+    def _automatic_update_check(self):
+        """Sprawdza aktualizacje po uruchomieniu, bez komunikatu gdy brak zmian."""
+        if not self.update_in_progress:
+            self.check_for_updates(silent=True)
+
+    def check_for_updates(self, silent=False):
+        """Uruchamia sprawdzanie najnowszego Release w tle."""
+
+        if self.update_in_progress:
+            return
+
+        self.update_in_progress = True
+        self.update_button.configure(
+            state="disabled",
+            text="Sprawdzanie...",
+        )
+        self.connection_label.configure(
+            text="Sprawdzanie aktualizacji...",
+            text_color="#E6C76A",
+        )
+
+        threading.Thread(
+            target=self._check_updates_worker,
+            args=(silent,),
+            daemon=True,
+        ).start()
+
+    def _check_updates_worker(self, silent=False):
+        try:
+            release_info = self.update_service.check_for_updates()
+        except Exception as error:
+            self.after(
+                0,
+                lambda message=str(error), is_silent=silent: self._on_update_check_error(message, is_silent),
+            )
+            return
+
+        self.after(
+            0,
+            lambda info=release_info, is_silent=silent: self._on_update_check_complete(info, is_silent),
+        )
+
+    def _on_update_check_error(self, error_message, silent=False):
+        self._finish_update_operation()
+
+        self.connection_label.configure(
+            text="Nie udało się sprawdzić aktualizacji",
+            text_color="#F08080",
+        )
+
+        if not silent:
+            messagebox.showerror(
+                "Błąd sprawdzania aktualizacji",
+                error_message,
+                parent=self,
+            )
+
+    def _on_update_check_complete(self, release_info, silent=False):
+        if not release_info["update_available"]:
+            self._finish_update_operation()
+
+            self.connection_label.configure(
+                text="Program jest aktualny",
+                text_color="#65D69A",
+            )
+
+            if not silent:
+                messagebox.showinfo(
+                    "Brak aktualizacji",
+                    (
+                        "Korzystasz z najnowszej dostępnej wersji programu.\n\n"
+                        f"Zainstalowana wersja: {release_info['current_version']}"
+                    ),
+                    parent=self,
+                )
+            return
+
+        latest_version = release_info["latest_version"]
+        release_name = release_info.get("release_name") or latest_version
+        release_notes = release_info.get("release_notes", "").strip()
+
+        if not release_notes:
+            release_notes = "Brak opisu zmian dla tej wersji."
+
+        details = (
+            f"Dostępna jest nowa wersja GreenUp! Label Printer.\n\n"
+            f"Zainstalowana wersja: {release_info['current_version']}\n"
+            f"Dostępna wersja: {latest_version}\n"
+            f"Wydanie: {release_name}\n\n"
+            f"Opis zmian:\n{release_notes}\n\n"
+            "Czy pobrać i zainstalować aktualizację?"
+        )
+
+        install_confirmation = messagebox.askyesno(
+            "Dostępna aktualizacja",
+            details,
+            parent=self,
+        )
+
+        if not install_confirmation:
+            self._finish_update_operation()
+            self.connection_label.configure(
+                text="Aktualizacja pominięta",
+                text_color=self.muted_color,
+            )
+            return
+
+        self.update_button.configure(
+            text="Pobieranie...",
+        )
+        self.connection_label.configure(
+            text=f"Pobieranie wersji {latest_version}...",
+            text_color="#E6C76A",
+        )
+
+        threading.Thread(
+            target=self._download_update_worker,
+            args=(release_info,),
+            daemon=True,
+        ).start()
+
+    def _download_update_worker(self, release_info):
+        try:
+            archive_path = self.download_service.download_update(release_info)
+        except Exception as error:
+            self.after(
+                0,
+                lambda message=str(error): self._on_update_download_error(message),
+            )
+            return
+
+        self.after(
+            0,
+            lambda path=archive_path: self._on_update_download_complete(path),
+        )
+
+    def _on_update_download_error(self, error_message):
+        self._finish_update_operation()
+
+        self.connection_label.configure(
+            text="Nie udało się pobrać aktualizacji",
+            text_color="#F08080",
+        )
+
+        messagebox.showerror(
+            "Błąd pobierania aktualizacji",
+            error_message,
+            parent=self,
+        )
+
+    def _on_update_download_complete(self, archive_path):
+        # Instalacja wymaga uruchomionej wersji EXE.
+        if not getattr(sys, "frozen", False):
+            self._finish_update_operation()
+            messagebox.showinfo(
+                "Pobieranie zakończone",
+                (
+                    "Aktualizacja została pobrana i zweryfikowana.\n\n"
+                    f"Archiwum:\n{archive_path}\n\n"
+                    "Automatyczna instalacja będzie dostępna "
+                    "w skompilowanej wersji programu."
+                ),
+                parent=self,
+            )
+            return
+
+        install_dir = Path(sys.executable).resolve().parent
+        updater_path = install_dir / "Updater.exe"
+        app_exe = Path(sys.executable).resolve()
+
+        if not updater_path.is_file():
+            self._finish_update_operation()
+            messagebox.showerror(
+                "Brak aktualizatora",
+                (
+                    "Nie znaleziono Updater.exe w katalogu programu.\n\n"
+                    f"Oczekiwana lokalizacja:\n{updater_path}"
+                ),
+                parent=self,
+            )
+            return
+
+        confirmed = messagebox.askyesno(
+            "Gotowa do instalacji",
+            (
+                "Aktualizacja została pobrana i zweryfikowana.\n\n"
+                "Program zostanie teraz zamknięty, a aktualizator "
+                "zainstaluje nową wersję.\n\n"
+                "Czy kontynuować?"
+            ),
+            parent=self,
+        )
+
+        if not confirmed:
+            self._finish_update_operation()
+            self.connection_label.configure(
+                text="Aktualizacja pobrana — instalacja odłożona",
+                text_color=self.muted_color,
+            )
+            messagebox.showinfo(
+                "Aktualizacja pobrana",
+                (
+                    "Archiwum aktualizacji pozostaje zapisane w katalogu "
+                    "tymczasowym systemu. Możesz ponownie uruchomić "
+                    "sprawdzanie aktualizacji, aby rozpocząć instalację."
+                ),
+                parent=self,
+            )
+            return
+
+        command = [
+            str(updater_path),
+            "--pid",
+            str(os.getpid()),
+            "--archive",
+            str(archive_path),
+            "--app-exe",
+            str(app_exe),
+        ]
+
+        try:
+            subprocess.Popen(
+                command,
+                cwd=install_dir,
+                creationflags=subprocess.CREATE_NEW_CONSOLE,
+            )
+        except OSError as error:
+            self._finish_update_operation()
+            messagebox.showerror(
+                "Nie można uruchomić aktualizatora",
+                str(error),
+                parent=self,
+            )
+            return
+
+        # Updater poczeka na zakończenie tego procesu,
+        # a następnie podmieni katalog aplikacji.
+        self.destroy()
+
+    def _finish_update_operation(self):
+        self.update_in_progress = False
+
+        try:
+            self.update_button.configure(
+                state="normal",
+                text="Sprawdź aktualizacje",
+            )
+        except (AttributeError, RuntimeError):
+            pass
+
+
