@@ -85,7 +85,7 @@ exe = EXE(
     upx=True,
     console=False,
     disable_windowed_traceback=False,
-icon=str(ROOT_DIR / "assets" / "greenup_label_printer_icon.ico"),
+    icon=str(ROOT_DIR / "assets" / "greenup_label_printer_icon.ico"),
 )
 
 

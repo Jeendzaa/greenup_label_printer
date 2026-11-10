@@ -153,6 +153,7 @@ class TemplateEditorView(ctk.CTkFrame):
         self.selected_index = None
         self.preview_image = None
         self._preview_job = None
+        self._elements_scroll_reset_job = None
 
         self._build_ui()
         self._new_template()
@@ -300,13 +301,28 @@ class TemplateEditorView(ctk.CTkFrame):
             pady=3,
         )
 
+        ctk.CTkButton(
+            left,
+            text="Odśwież listę szablonów",
+            height=30,
+            fg_color="#303B46",
+            hover_color="#3A4A58",
+            command=self.refresh_templates,
+        ).grid(
+            row=5,
+            column=0,
+            sticky="ew",
+            padx=9,
+            pady=(3, 5),
+        )
+
         actions = ctk.CTkFrame(
             left,
             fg_color="transparent",
         )
 
         actions.grid(
-            row=5,
+            row=6,
             column=0,
             sticky="ew",
             padx=7,
@@ -610,10 +626,14 @@ class TemplateEditorView(ctk.CTkFrame):
             "49",
         )
 
-        self._refresh_elements()
+        self._refresh_elements(reset_scroll=True)
         self._show_properties()
         self._refresh_templates()
         self._schedule_preview()
+
+    def refresh_templates(self):
+        """Publiczne odświeżenie listy szablonów, np. po zmianie widoku."""
+        self._refresh_templates()
 
     def _refresh_templates(self):
         for child in self.templates_frame.winfo_children():
@@ -689,7 +709,7 @@ class TemplateEditorView(ctk.CTkFrame):
             str(self.template["height"]),
         )
 
-        self._refresh_elements()
+        self._refresh_elements(reset_scroll=True)
         self._show_properties()
         self._refresh_templates()
         self._schedule_preview()
@@ -1039,7 +1059,7 @@ class TemplateEditorView(ctk.CTkFrame):
     # ELEMENT LIST
     # =========================================================
 
-    def _refresh_elements(self):
+    def _refresh_elements(self, reset_scroll=False):
         for child in self.elements_frame.winfo_children():
             child.destroy()
 
@@ -1080,6 +1100,46 @@ class TemplateEditorView(ctk.CTkFrame):
                 padx=2,
                 pady=2,
             )
+
+        if reset_scroll:
+            self._schedule_elements_scroll_reset()
+
+    def _schedule_elements_scroll_reset(self):
+        """Planuje reset przewijania po przebudowaniu i przeliczeniu listy."""
+        if self._elements_scroll_reset_job is not None:
+            try:
+                self.after_cancel(self._elements_scroll_reset_job)
+            except Exception:
+                pass
+
+        # CTkScrollableFrame aktualizuje rozmiar zawartości asynchronicznie.
+        # Krótkie opóźnienie pozwala Tk przeliczyć geometrię i scrollregion.
+        self._elements_scroll_reset_job = self.after(
+            50,
+            self._reset_elements_scroll,
+        )
+
+    def _reset_elements_scroll(self):
+        """Przewija listę elementów na samą górę po aktualizacji zawartości."""
+        self._elements_scroll_reset_job = None
+
+        if not self.elements_frame.winfo_exists():
+            return
+
+        canvas = self.elements_frame._parent_canvas
+
+        # Najpierw przelicz geometrię, następnie odśwież obszar przewijania.
+        self.update_idletasks()
+        canvas.update_idletasks()
+
+        try:
+            canvas.configure(scrollregion=canvas.bbox("all"))
+        except Exception:
+            pass
+
+        canvas.yview_moveto(0.0)
+        canvas.update_idletasks()
+        canvas.yview_moveto(0.0)
 
     def _select_element(self, index):
         self.selected_index = index
