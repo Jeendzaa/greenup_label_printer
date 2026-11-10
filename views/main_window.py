@@ -321,9 +321,11 @@ class MainWindow(ctk.CTk):
         self.views[view_id].grid()
 
         # Odświeżamy listę szablonów przy każdym wejściu
-        # do zakładki drukowania.
+        # do zakładki drukowania oraz edytora.
         if view_id == "druk":
             self.views["druk"].refresh_templates()
+        elif view_id == "tworz":
+            self.views["tworz"].refresh_templates()
 
         titles = {
             "druk": "Drukuj etykietę",
@@ -480,9 +482,11 @@ class MainWindow(ctk.CTk):
             )
             return
 
+        target_version = release_info["latest_version"]
         self.after(
             0,
-            lambda path=archive_path: self._on_update_download_complete(path),
+            lambda path=archive_path, version=target_version:
+                self._on_update_download_complete(path, version),
         )
 
     def _on_update_download_error(self, error_message):
@@ -499,7 +503,7 @@ class MainWindow(ctk.CTk):
             parent=self,
         )
 
-    def _on_update_download_complete(self, archive_path):
+    def _on_update_download_complete(self, archive_path, target_version):
         # Instalacja wymaga uruchomionej wersji EXE.
         if not getattr(sys, "frozen", False):
             self._finish_update_operation()
@@ -567,6 +571,8 @@ class MainWindow(ctk.CTk):
             str(archive_path),
             "--app-exe",
             str(app_exe),
+            "--target-version",
+            str(target_version),
         ]
 
         try:

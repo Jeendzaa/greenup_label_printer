@@ -4,7 +4,7 @@ import sys
 
 APP_NAME = "GreenUpLabelPrinter"
 
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.1.1"
 
 GITHUB_OWNER = "Jeendzaa"
 GITHUB_REPO = "greenup_label_printer"
