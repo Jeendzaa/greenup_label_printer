@@ -1,9 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from pathlib import Path
 
-a = Analysis(
-    ['updater.py'],
-    pathex=[],
+ROOT_DIR = Path(SPECPATH).resolve()
+updater_icon = ROOT_DIR / "assets" / "updater_icon.ico"
+if not updater_icon.is_file():
+    raise FileNotFoundError(f"Nie znaleziono ikony aktualizatora: {updater_icon}")
+
+analysis = Analysis(
+    [str(ROOT_DIR / "updater.py")],
+    pathex=[str(ROOT_DIR)],
     binaries=[],
     datas=[],
     hiddenimports=[],
@@ -14,25 +20,27 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
-pyz = PYZ(a.pure)
 
-exe = EXE(
+pyz = PYZ(analysis.pure)
+
+EXE(
     pyz,
-    a.scripts,
-    a.binaries,
-    a.datas,
+    analysis.scripts,
+    analysis.binaries,
+    analysis.datas,
     [],
-    name='Updater',
+    name="Updater",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=str(updater_icon),
 )

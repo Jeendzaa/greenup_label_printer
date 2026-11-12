@@ -7,11 +7,10 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog
 
 import customtkinter as ctk
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
 from services.image_service import ImageService
 from services.preview_service import PreviewService
-from services.zpl_service import ZPLService
 
 
 class TemplateEditorView(ctk.CTkFrame):
@@ -36,6 +35,8 @@ class TemplateEditorView(ctk.CTkFrame):
             "content": "123456789",
             "height": 15,
             "module_width": 2,
+            "barcode_type": "code128",
+            "show_text": False,
         },
         "qr": {
             "type": "qr",
@@ -58,6 +59,7 @@ class TemplateEditorView(ctk.CTkFrame):
             "y": 3,
             "length": 20,
             "thickness": 0.3,
+            "orientation": "horizontal",
         },
         "image": {
             "type": "image",
@@ -98,6 +100,8 @@ class TemplateEditorView(ctk.CTkFrame):
             ("y", "Y (mm)", "float"),
             ("height", "Wysokość (mm)", "float"),
             ("module_width", "Szerokość modułu (1–10)", "int"),
+            ("barcode_type", "Rodzaj kodu", "barcode_type"),
+            ("show_text", "Podpis pod kodem", "barcode_hri"),
         ],
         "qr": [
             ("content", "Dane QR", "str"),
@@ -115,6 +119,7 @@ class TemplateEditorView(ctk.CTkFrame):
         "line": [
             ("x", "X (mm)", "float"),
             ("y", "Y (mm)", "float"),
+            ("orientation", "Orientacja", "line_orientation"),
             ("length", "Długość (mm)", "float"),
             ("thickness", "Grubość (mm)", "float"),
         ],
@@ -138,19 +143,22 @@ class TemplateEditorView(ctk.CTkFrame):
         "image": "Obraz",
     }
 
-    def __init__(self, parent, template_service):
+    def __init__(self, parent, template_service, zpl_service, printer_service):
         super().__init__(
             parent,
             fg_color="transparent",
         )
 
         self.template_service = template_service
-        self.zpl_service = ZPLService()
+        self.zpl_service = zpl_service
+        self.printer_service = printer_service
         self.preview_service = PreviewService(dpi=self.DPI)
         self.image_service = ImageService()
 
         self.template = None
         self.selected_index = None
+        self.selected_template_file = None
+        self.selected_template_name = None
         self.preview_image = None
         self._preview_job = None
         self._elements_scroll_reset_job = None
@@ -316,13 +324,28 @@ class TemplateEditorView(ctk.CTkFrame):
             pady=(3, 5),
         )
 
+        ctk.CTkButton(
+            left,
+            text="Usuń wybrany szablon",
+            height=30,
+            fg_color="#873D42",
+            hover_color="#A44A50",
+            command=self._delete_template,
+        ).grid(
+            row=6,
+            column=0,
+            sticky="ew",
+            padx=9,
+            pady=(3, 5),
+        )
+
         actions = ctk.CTkFrame(
             left,
             fg_color="transparent",
         )
 
         actions.grid(
-            row=6,
+            row=7,
             column=0,
             sticky="ew",
             padx=7,
@@ -356,6 +379,22 @@ class TemplateEditorView(ctk.CTkFrame):
             column=1,
             sticky="ew",
             padx=2,
+        )
+
+        ctk.CTkButton(
+            left,
+            text="Drukuj aktualny szablon",
+            height=38,
+            fg_color="#27845B",
+            hover_color="#1F6B49",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            command=self._print_current_template,
+        ).grid(
+            row=8,
+            column=0,
+            sticky="ew",
+            padx=9,
+            pady=(2, 10),
         )
 
         # -----------------------------------------------------
@@ -598,6 +637,9 @@ class TemplateEditorView(ctk.CTkFrame):
     # =========================================================
 
     def _new_template(self):
+        self.selected_template_file = None
+        self.selected_template_name = None
+
         self.template = {
             "version": 2,
             "id": "nowy_szablon",
@@ -660,8 +702,8 @@ class TemplateEditorView(ctk.CTkFrame):
                 label += " [ZPL]"
 
             is_selected = (
-                graphic
-                and self.template.get("id") == item.get("id")
+                self.selected_template_file is not None
+                and self.selected_template_file == item.get("_file")
             )
 
             ctk.CTkButton(
@@ -680,6 +722,13 @@ class TemplateEditorView(ctk.CTkFrame):
 
     def _load_template(self, item):
         if item.get("version") != 2:
+            self.selected_template_file = item.get("_file")
+            self.selected_template_name = item.get(
+                "name",
+                item.get("id", "Szablon ZPL"),
+            )
+            self._refresh_templates()
+
             messagebox.showinfo(
                 "Szablon ZPL",
                 "To starszy szablon z gotowym kodem ZPL. "
@@ -690,6 +739,11 @@ class TemplateEditorView(ctk.CTkFrame):
             return
 
         self.template = copy.deepcopy(item)
+        self.selected_template_file = item.get("_file")
+        self.selected_template_name = item.get(
+            "name",
+            item.get("id", "Szablon"),
+        )
         self.template.pop("_file", None)
 
         self.selected_index = None
@@ -717,6 +771,418 @@ class TemplateEditorView(ctk.CTkFrame):
         self._status(
             f"Wczytano: {self.template['name']}"
         )
+
+    # =========================================================
+    # PRINT FROM EDITOR
+    # =========================================================
+
+    def _rotate_zpl_for_print(self, zpl, template, rotation):
+        """Renderuje całą etykietę do bitmapy i obraca ją przed wydrukiem.
+
+        Obrót dotyczy wyłącznie bieżącego zadania drukowania. Nie zmienia
+        szablonu ani jego elementów zapisanych w edytorze.
+        """
+        if rotation not in (90, 180, 270):
+            raise ValueError("Nieobsługiwany kąt obrotu etykiety.")
+
+        image = self.preview_service.generate_preview(
+            zpl,
+            float(template["width"]),
+            float(template["height"]),
+        )
+
+        transpose = {
+            90: Image.Transpose.ROTATE_270,   # zgodnie z ruchem wskazówek zegara
+            180: Image.Transpose.ROTATE_180,
+            270: Image.Transpose.ROTATE_90,   # przeciwnie do ruchu wskazówek zegara
+        }
+        image = image.transpose(transpose[rotation])
+
+        # Konwersja do monochromatycznej bitmapy 1-bitowej w natywnej
+        # rozdzielczości podglądu (203 DPI), bez skalowania etykiety.
+        bitmap = (
+            image.convert("L")
+            .point(lambda pixel: 0 if pixel < 128 else 255)
+            .convert("1", dither=Image.Dither.NONE)
+        )
+
+        width, height = bitmap.size
+        row_bytes = (width + 7) // 8
+        packed = bytearray(bitmap.tobytes())
+
+        # PIL: 0 = czarny, 1 = biały. ZPL ^GFA: 1 = czarny.
+        for index in range(len(packed)):
+            packed[index] ^= 0xFF
+
+        # Bity dopełniające poza prawą krawędzią muszą pozostać białe.
+        remainder = width % 8
+        if remainder:
+            padding_mask = (0xFF << (8 - remainder)) & 0xFF
+            for row in range(height):
+                packed[row * row_bytes + row_bytes - 1] &= padding_mask
+
+        total_bytes = row_bytes * height
+        graphic_data = packed.hex().upper()
+
+        return "\n".join((
+            "^XA",
+            "^CI28",
+            f"^PW{width}",
+            f"^LL{height}",
+            "^LH0,0",
+            f"^FO0,0^GFA,{total_bytes},{total_bytes},{row_bytes},{graphic_data}^FS",
+            "^XZ",
+        ))
+
+    def _print_current_template(self):
+        """Otwiera formularz danych i ilości dla aktualnego stanu edytora."""
+
+        try:
+            self._apply_dimensions()
+
+            if not isinstance(self.template, dict):
+                raise ValueError("Brak szablonu do wydrukowania.")
+
+            # Drukujemy kopię aktualnego stanu. Nie zapisujemy ani nie
+            # modyfikujemy pliku szablonu na dysku.
+            template = copy.deepcopy(self.template)
+            template["name"] = (
+                self.name_entry.get().strip()
+                or template.get("name", "Bieżący szablon")
+            )
+
+            self._open_print_dialog(template)
+
+        except Exception as exc:
+            messagebox.showerror(
+                "Nie można przygotować wydruku",
+                str(exc),
+                parent=self,
+            )
+
+    def _open_print_dialog(self, template):
+        """Zbiera wartości pól danych oraz liczbę kopii."""
+
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Drukowanie szablonu")
+        dialog.geometry("470x620")
+        dialog.minsize(400, 430)
+        dialog.transient(self.winfo_toplevel()
+                         if self.winfo_toplevel() is not self
+                         else self)
+        dialog.grab_set()
+        dialog.grid_columnconfigure(0, weight=1)
+        dialog.grid_rowconfigure(1, weight=1)
+
+        ctk.CTkLabel(
+            dialog,
+            text="DANE DO WYDRUKU",
+            font=ctk.CTkFont(size=16, weight="bold"),
+        ).grid(
+            row=0,
+            column=0,
+            sticky="w",
+            padx=20,
+            pady=(18, 5),
+        )
+
+        fields_frame = ctk.CTkScrollableFrame(
+            dialog,
+            fg_color="transparent",
+        )
+        fields_frame.grid(
+            row=1,
+            column=0,
+            sticky="nsew",
+            padx=12,
+            pady=5,
+        )
+        fields_frame.grid_columnconfigure(0, weight=1)
+
+        field_entries = {}
+        field_definitions = []
+
+        # Pola z nowego edytora graficznego.
+        for element in template.get("elements", []):
+            if element.get("type") != "data":
+                continue
+
+            name = element.get("name")
+            if not name:
+                raise ValueError(
+                    "Jedno z pól danych nie ma identyfikatora. "
+                    "Uzupełnij jego konfigurację przed drukowaniem."
+                )
+
+            if name in field_entries:
+                continue
+
+            field_definitions.append({
+                "name": name,
+                "label": element.get("label") or name,
+                "required": element.get("required", True),
+            })
+
+        # Zachowujemy również obsługę starszej listy pól, jeśli występuje
+        # w szablonie graficznym.
+        for field in template.get("fields", []):
+            if not isinstance(field, dict):
+                continue
+
+            name = field.get("name")
+            if not name or any(item["name"] == name for item in field_definitions):
+                continue
+
+            field_definitions.append({
+                "name": name,
+                "label": field.get("label") or name,
+                "required": field.get("required", False),
+            })
+
+        if not field_definitions:
+            ctk.CTkLabel(
+                fields_frame,
+                text="Ten szablon nie zawiera dodatkowych pól danych.",
+                text_color="#AAB7C4",
+                wraplength=390,
+                justify="left",
+            ).grid(
+                row=0,
+                column=0,
+                sticky="w",
+                padx=5,
+                pady=10,
+            )
+
+        for row, field in enumerate(field_definitions):
+            label_text = field["label"]
+            if field["required"]:
+                label_text += " *"
+
+            ctk.CTkLabel(
+                fields_frame,
+                text=label_text,
+                anchor="w",
+            ).grid(
+                row=row * 2,
+                column=0,
+                sticky="ew",
+                padx=5,
+                pady=(8, 2),
+            )
+
+            entry = ctk.CTkEntry(
+                fields_frame,
+                placeholder_text="Wprowadź wartość",
+            )
+            entry.grid(
+                row=row * 2 + 1,
+                column=0,
+                sticky="ew",
+                padx=5,
+                pady=(0, 3),
+            )
+            field_entries[field["name"]] = entry
+
+        ctk.CTkLabel(
+            dialog,
+            text="ORIENTACJA WYDRUKU",
+            font=ctk.CTkFont(size=12, weight="bold"),
+        ).grid(
+            row=2,
+            column=0,
+            sticky="w",
+            padx=20,
+            pady=(8, 3),
+        )
+
+        orientation_var = ctk.StringVar(value="0° — Oryginalna")
+        orientation_menu = ctk.CTkOptionMenu(
+            dialog,
+            variable=orientation_var,
+            values=[
+                "0° — Oryginalna",
+                "90° — W prawo",
+                "180° — Do góry nogami",
+                "270° — W lewo",
+            ],
+            width=230,
+        )
+        orientation_menu.grid(
+            row=3,
+            column=0,
+            sticky="w",
+            padx=20,
+            pady=(0, 8),
+        )
+
+        ctk.CTkLabel(
+            dialog,
+            text="LICZBA SZTUK",
+            font=ctk.CTkFont(size=12, weight="bold"),
+        ).grid(
+            row=4,
+            column=0,
+            sticky="w",
+            padx=20,
+            pady=(5, 3),
+        )
+
+        quantity_entry = ctk.CTkEntry(
+            dialog,
+            placeholder_text="Liczba etykiet",
+            width=130,
+        )
+        quantity_entry.insert(0, "1")
+        quantity_entry.grid(
+            row=5,
+            column=0,
+            sticky="w",
+            padx=20,
+            pady=(0, 10),
+        )
+
+        buttons = ctk.CTkFrame(
+            dialog,
+            fg_color="transparent",
+        )
+        buttons.grid(
+            row=6,
+            column=0,
+            sticky="ew",
+            padx=15,
+            pady=(0, 15),
+        )
+        buttons.grid_columnconfigure((0, 1), weight=1)
+
+        def continue_to_confirmation():
+            raw_quantity = quantity_entry.get().strip()
+
+            try:
+                quantity = int(raw_quantity)
+                if quantity < 1:
+                    raise ValueError
+            except ValueError:
+                messagebox.showerror(
+                    "Nieprawidłowa ilość",
+                    "Podaj liczbę całkowitą większą od zera.",
+                    parent=dialog,
+                )
+                quantity_entry.focus_set()
+                return
+
+            values = {
+                name: entry.get().strip()
+                for name, entry in field_entries.items()
+            }
+
+            try:
+                # Walidacja i generowanie odbywają się przed pytaniem
+                # o ostateczne potwierdzenie. Nic nie jest jeszcze wysyłane.
+                zpl = self.zpl_service.generate(template, values)
+
+                orientation_labels = {
+                    "0° — Oryginalna": 0,
+                    "90° — W prawo": 90,
+                    "180° — Do góry nogami": 180,
+                    "270° — W lewo": 270,
+                }
+                rotation = orientation_labels[orientation_var.get()]
+
+                if rotation:
+                    zpl = self._rotate_zpl_for_print(
+                        zpl,
+                        template,
+                        rotation,
+                    )
+            except Exception as exc:
+                messagebox.showerror(
+                    "Nieprawidłowe dane",
+                    str(exc),
+                    parent=dialog,
+                )
+                return
+
+            dialog.grab_release()
+            dialog.destroy()
+
+            output_width = template.get("width")
+            output_height = template.get("height")
+            if rotation in (90, 270):
+                output_width, output_height = output_height, output_width
+
+            confirmed = messagebox.askyesno(
+                "Potwierdź drukowanie",
+                (
+                    f"Szablon: {template.get('name', 'Bieżący szablon')}\n"
+                    f"Orientacja: {rotation}°\n"
+                    f"Wymiary wydruku: {output_width} × "
+                    f"{output_height} mm\n"
+                    f"Liczba etykiet: {quantity}\n\n"
+                    "Czy wysłać etykiety do drukarki?"
+                ),
+                parent=self.winfo_toplevel(),
+            )
+
+            if not confirmed:
+                self._status("Drukowanie anulowane.")
+                return
+
+            try:
+                self.printer_service.send_zpl(
+                    zpl,
+                    copies=quantity,
+                )
+            except Exception as exc:
+                messagebox.showerror(
+                    "Błąd drukowania",
+                    str(exc),
+                    parent=self,
+                )
+                self._status("Nie udało się wysłać wydruku.")
+                return
+
+            self._status(
+                f"Wysłano do drukarki: {quantity} "
+                f"szt. | {template.get('name', 'Szablon')}"
+            )
+            messagebox.showinfo(
+                "Wysłano do drukarki",
+                f"Wysłano {quantity} "
+                f"{'etykietę' if quantity == 1 else 'etykiety' if 2 <= quantity <= 4 else 'etykiet'} "
+                "do drukarki.",
+                parent=self.winfo_toplevel(),
+            )
+
+        ctk.CTkButton(
+            buttons,
+            text="Anuluj",
+            fg_color="#4A5662",
+            hover_color="#5B6875",
+            command=dialog.destroy,
+        ).grid(
+            row=0,
+            column=0,
+            sticky="ew",
+            padx=4,
+        )
+
+        ctk.CTkButton(
+            buttons,
+            text="Dalej",
+            fg_color="#27845B",
+            hover_color="#1F6B49",
+            command=continue_to_confirmation,
+        ).grid(
+            row=0,
+            column=1,
+            sticky="ew",
+            padx=4,
+        )
+
+        quantity_entry.focus_set()
+        dialog.bind("<Return>", lambda _event: continue_to_confirmation())
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
 
     # =========================================================
     # SAVE
@@ -764,6 +1230,8 @@ class TemplateEditorView(ctk.CTkFrame):
                     overwrite=True,
                 )
 
+            self.selected_template_file = path.name
+            self.selected_template_name = name
             self._refresh_templates()
 
             self._status(
@@ -782,6 +1250,52 @@ class TemplateEditorView(ctk.CTkFrame):
                 str(exc),
                 parent=self,
             )
+
+    def _delete_template(self):
+        """Usuwa wybrany zapisany szablon po potwierdzeniu użytkownika."""
+
+        if not self.selected_template_file:
+            messagebox.showinfo(
+                "Nie wybrano szablonu",
+                "Najpierw wybierz zapisany szablon z listy.",
+                parent=self,
+            )
+            return
+
+        template_name = (
+            self.selected_template_name
+            or self.selected_template_file
+        )
+
+        confirmed = messagebox.askyesno(
+            "Usuń szablon",
+            (
+                f"Czy na pewno chcesz usunąć szablon "
+                f"'{template_name}'?\n\n"
+                "Operacji nie można cofnąć. "
+                "Niezapisane zmiany w edytorze również zostaną utracone."
+            ),
+            icon="warning",
+            parent=self,
+        )
+
+        if not confirmed:
+            return
+
+        try:
+            deleted_path = self.template_service.delete_template(
+                self.selected_template_file
+            )
+        except Exception as exc:
+            messagebox.showerror(
+                "Błąd usuwania szablonu",
+                str(exc),
+                parent=self,
+            )
+            return
+
+        self._status(f"Usunięto szablon: {template_name}")
+        self._new_template()
 
     @staticmethod
     def _make_slug(value):
@@ -932,8 +1446,7 @@ class TemplateEditorView(ctk.CTkFrame):
             self._schedule_preview()
 
             self._status(
-                f"Dodano obraz: {Path(source_path).name}. "
-                "Podgląd i druk grafiki zostaną podłączone w kolejnych etapach."
+                f"Dodano obraz do bieżącego szablonu: {Path(source_path).name}"
             )
 
         except Exception as exc:
@@ -1274,7 +1787,63 @@ class TemplateEditorView(ctk.CTkFrame):
                 pady=(7, 2),
             )
 
-            if value_type == "image_rotation":
+            if value_type == "line_orientation":
+                orientation_labels = {
+                    "horizontal": "Pozioma",
+                    "vertical": "Pionowa",
+                }
+                current_orientation = element.get(
+                    key,
+                    "horizontal",
+                )
+                widget = ctk.CTkOptionMenu(
+                    self.properties_frame,
+                    values=["Pozioma", "Pionowa"],
+                    command=lambda value, k=key: self._set_property(
+                        k,
+                        "vertical" if value == "Pionowa" else "horizontal",
+                    ),
+                )
+                widget.set(
+                    orientation_labels.get(
+                        current_orientation,
+                        "Pozioma",
+                    )
+                )
+
+            elif value_type == "barcode_type":
+                barcode_types = {
+                    "code128": "Code 128",
+                    "code39": "Code 39",
+                    "ean13": "EAN-13",
+                    "ean8": "EAN-8",
+                    "upca": "UPC-A",
+                    "i2of5": "Interleaved 2 of 5",
+                }
+                current_type = element.get(key, "code128")
+                widget = ctk.CTkOptionMenu(
+                    self.properties_frame,
+                    values=list(barcode_types.values()),
+                    command=lambda value, k=key, options=barcode_types:
+                    self._set_property(
+                        k,
+                        next(code for code, label in options.items() if label == value),
+                    ),
+                )
+                widget.set(barcode_types.get(current_type, "Code 128"))
+
+            elif value_type == "barcode_hri":
+                widget = ctk.CTkOptionMenu(
+                    self.properties_frame,
+                    values=["Nie", "Tak"],
+                    command=lambda value, k=key: self._set_property(
+                        k,
+                        value == "Tak",
+                    ),
+                )
+                widget.set("Tak" if element.get(key, False) else "Nie")
+
+            elif value_type == "image_rotation":
                 widget = ctk.CTkOptionMenu(
                     self.properties_frame,
                     values=["0°", "90°", "180°", "270°"],
@@ -1308,16 +1877,25 @@ class TemplateEditorView(ctk.CTkFrame):
                     str(element.get(key, "")),
                 )
 
+                # Aktualizuj model i podgląd również podczas pisania.
+                # Błędy niekompletnych wartości nie powinny wyświetlać
+                # okna dialogowego przy każdym wpisanym znaku.
+                widget.bind(
+                    "<KeyRelease>",
+                    lambda _event, k=key, w=widget, t=value_type:
+                    self._entry_property_changed(k, w, t, show_error=False),
+                )
+
                 widget.bind(
                     "<FocusOut>",
                     lambda _event, k=key, w=widget, t=value_type:
-                    self._entry_property_changed(k, w, t),
+                    self._entry_property_changed(k, w, t, show_error=True),
                 )
 
                 widget.bind(
                     "<Return>",
                     lambda _event, k=key, w=widget, t=value_type:
-                    self._entry_property_changed(k, w, t),
+                    self._entry_property_changed(k, w, t, show_error=True),
                 )
 
             widget.pack(
@@ -1431,6 +2009,7 @@ class TemplateEditorView(ctk.CTkFrame):
         key,
         widget,
         value_type,
+        show_error=False,
     ):
         if self.selected_index is None:
             return
@@ -1475,11 +2054,16 @@ class TemplateEditorView(ctk.CTkFrame):
             self._schedule_preview()
 
         except ValueError as exc:
-            messagebox.showerror(
-                "Nieprawidłowa wartość",
-                str(exc),
-                parent=self,
-            )
+            if show_error:
+                messagebox.showerror(
+                    "Nieprawidłowa wartość",
+                    str(exc),
+                    parent=self,
+                )
+            else:
+                self._status(
+                    "Nieprawidłowa wartość właściwości — popraw ją, aby odświeżyć podgląd."
+                )
 
     def _set_property(self, key, value):
         if self.selected_index is None:
@@ -1527,15 +2111,92 @@ class TemplateEditorView(ctk.CTkFrame):
                 if name and name not in values:
                     values[name] = field.get("default", "")
 
-            # Renderer ZPL obsługuje na tym etapie wszystkie elementy
-            # poza obrazami. Obrazy nakładamy na gotowy podgląd jako
-            # osobną warstwę bitmapową.
+            # Podgląd korzysta z kopii szablonu. Nie zmieniamy właściwego
+            # szablonu ani zasad walidacji używanych podczas zapisu i druku.
             preview_template = copy.deepcopy(self.template)
-            preview_template["elements"] = [
-                element
-                for element in preview_template.get("elements", [])
-                if element.get("type") != "image"
-            ]
+
+            # Wartości przykładowe mogą być puste, a pola wymagane zostaną
+            # uzupełnione dopiero w formularzu drukowania. Nie blokuje to
+            # samego podglądu etykiety.
+            for field in preview_template.get("fields", []):
+                if isinstance(field, dict):
+                    field["required"] = False
+
+            preview_elements = []
+            code39_elements = []
+            preview_warnings = []
+            for element in preview_template.get("elements", []):
+                kind = element.get("type")
+
+                # Obrazy nakładamy na gotowy podgląd jako osobną warstwę.
+                if kind == "image":
+                    continue
+
+                if kind == "data":
+                    element["required"] = False
+
+                # Renderer ZPL wymaga, aby oba wymiary czcionki skalowalnej
+                # miały co najmniej 10 dots. Przy 203 DPI jest to nieco
+                # ponad 1,25 mm. Korekta dotyczy wyłącznie kopii podglądu:
+                # wartości w edytowanym szablonie i wydruku pozostają bez zmian.
+                if kind in ("text", "data"):
+                    minimum_font_mm = (10 * 25.4 / self.DPI) + 0.01
+                    for dimension in ("font_size", "font_width"):
+                        if dimension in element:
+                            element[dimension] = max(
+                                float(element[dimension]),
+                                minimum_font_mm,
+                            )
+
+                # Pusty kod kreskowy lub QR (np. {{numer_partii}} bez
+                # utworzonego jeszcze pola danych) jest pomijany w podglądzie.
+                # Właściwy szablon pozostaje bez zmian.
+                if kind in ("barcode", "qr"):
+                    content = self.zpl_service._resolve_content(
+                        element.get("content", ""),
+                        values,
+                    )
+                    if not str(content).strip():
+                        continue
+
+                # EAN-13 przyjmuje wyłącznie cyfry. Nieprawidłowa wartość
+                # (np. numer partii PL-00/00/W/000003) nie może przerwać
+                # renderowania całej etykiety. Pomijamy tylko ten kod w
+                # podglądzie i informujemy o przyczynie w pasku statusu.
+                if (
+                    kind == "barcode"
+                    and element.get("barcode_type", "code128") == "ean13"
+                ):
+                    ean_content = str(
+                        self.zpl_service._resolve_content(
+                            element.get("content", ""), values
+                        ) or ""
+                    ).strip()
+                    if re.fullmatch(r"[0-9]{12,13}", ean_content) is None:
+                        preview_warnings.append(
+                            "EAN-13 pominięty: wymagane 12 lub 13 cyfr"
+                        )
+                        continue
+
+                # zplkit nie obsługuje poprawnie komendy ^B3. Code 39
+                # rysujemy osobno w PIL, z zachowaniem pozycji, wysokości,
+                # szerokości modułu i opcji podpisu. Do renderera ZPL trafiają
+                # pozostałe elementy etykiety.
+                if (
+                    kind == "barcode"
+                    and element.get("barcode_type", "code128") == "code39"
+                ):
+                    code39_elements.append((
+                        copy.deepcopy(element),
+                        self.zpl_service._resolve_content(
+                            element.get("content", ""), values
+                        ),
+                    ))
+                    continue
+
+                preview_elements.append(element)
+
+            preview_template["elements"] = preview_elements
 
             zpl = self.zpl_service.generate(preview_template, values)
             image = self.preview_service.generate_preview(
@@ -1544,6 +2205,7 @@ class TemplateEditorView(ctk.CTkFrame):
                 self.template["height"],
             )
 
+            self._overlay_code39_barcodes(image, code39_elements)
             self._overlay_images_on_preview(image)
 
             image.thumbnail((650, 450), Image.Resampling.LANCZOS)
@@ -1564,6 +2226,8 @@ class TemplateEditorView(ctk.CTkFrame):
             )
             if image_count:
                 status += f" | obrazy: {image_count}"
+            if preview_warnings:
+                status += " | " + "; ".join(dict.fromkeys(preview_warnings))
             self._status(status)
 
         except Exception as exc:
@@ -1620,6 +2284,81 @@ class TemplateEditorView(ctk.CTkFrame):
                 mode="L",
             )
             preview.paste((0, 0, 0), (x_dots, y_dots), black_mask)
+
+    # Wzorce Code 39: dziewięć naprzemiennych elementów (bar/space),
+    # gdzie "w" oznacza element szeroki, a "n" wąski.
+    _CODE39_PATTERNS = {
+        "0": "nnnwwnwnn", "1": "wnnwnnnnw", "2": "nnwwnnnnw",
+        "3": "wnwwnnnnn", "4": "nnnwwnnnw", "5": "wnnwwnnnn",
+        "6": "nnwwwnnnn", "7": "nnnwnnwnw", "8": "wnnwnnwnn",
+        "9": "nnwwnnwnn", "A": "wnnnnwnnw", "B": "nnwnnwnnw",
+        "C": "wnwnnwnnn", "D": "nnnnwwnnw", "E": "wnnnwwnnn",
+        "F": "nnwnwwnnn", "G": "nnnnnwwnw", "H": "wnnnnwwnn",
+        "I": "nnwnnwwnn", "J": "nnnnwwwnn", "K": "wnnnnnnww",
+        "L": "nnwnnnnww", "M": "wnwnnnnwn", "N": "nnnnwnnww",
+        "O": "wnnnwnnwn", "P": "nnwnwnnwn", "Q": "nnnnnnwww",
+        "R": "wnnnnnwwn", "S": "nnwnnnwwn", "T": "nnnnwnwwn",
+        "U": "wwnnnnnnw", "V": "nwwnnnnnw", "W": "wwwnnnnnn",
+        "X": "nwnnwnnnw", "Y": "wwnnwnnnn", "Z": "nwwnwnnnn",
+        "-": "nwnnnnwnw", ".": "wwnnnnwnn", " ": "nwwnnnwnn",
+        "$": "nwnwnwnnn", "/": "nwnwnnnwn", "+": "nwnnnwnwn",
+        "%": "nnnwnwnwn", "*": "nwnnwnwnn",
+    }
+
+    def _overlay_code39_barcodes(self, preview, elements):
+        """Rysuje Code 39 na obrazie podglądu, niezależnie od zplkit."""
+        if not elements:
+            return
+
+        draw = ImageDraw.Draw(preview)
+        font = ImageFont.load_default()
+
+        for element, raw_content in elements:
+            content = str(raw_content or "")
+            if not content:
+                continue
+
+            # Code 39 nie koduje małych liter ani polskich znaków.
+            # Nie przerywamy przez to podglądu pozostałych elementów.
+            if any(char not in self._CODE39_PATTERNS or char == "*" for char in content):
+                continue
+
+            module = int(element.get("module_width", 2))
+            if not 1 <= module <= 10:
+                continue
+
+            x = self._mm_to_dots(element.get("x", 0))
+            y = self._mm_to_dots(element.get("y", 0))
+            bar_height = max(1, self._mm_to_dots(element.get("height", 15)))
+            wide = module * 3  # domyślny stosunek szerokości Code 39 w ^BY
+            sequence = "*" + content + "*"
+
+            # Dziesięć modułów wolnej przestrzeni po obu stronach kodu.
+            cursor = x + (10 * module)
+            bars_start = cursor
+            top = y
+            bottom = y + bar_height - 1
+
+            for char_index, char in enumerate(sequence):
+                pattern = self._CODE39_PATTERNS[char]
+                for index, width_code in enumerate(pattern):
+                    element_width = module if width_code == "n" else wide
+                    if index % 2 == 0:
+                        left = cursor
+                        right = cursor + element_width - 1
+                        draw.rectangle((left, top, right, bottom), fill="black")
+                    cursor += element_width
+
+                # Jedna wąska przerwa między znakami.
+                if char_index < len(sequence) - 1:
+                    cursor += module
+
+            if element.get("show_text", False):
+                text_y = y + bar_height + 2
+                text_width = draw.textbbox((0, 0), content, font=font)[2]
+                bars_width = cursor - bars_start
+                text_x = bars_start + max(0, (bars_width - text_width) // 2)
+                draw.text((text_x, text_y), content, fill="black", font=font)
 
     @staticmethod
     def _mm_to_dots(value):

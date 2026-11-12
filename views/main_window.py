@@ -294,6 +294,8 @@ class MainWindow(ctk.CTk):
             "tworz": TemplateEditorView(
                 self.content_frame,
                 self.template_service,
+                self.zpl_service,
+                self.printer_service,
             ),
             "zplcode": ZPLView(
                 self.content_frame,

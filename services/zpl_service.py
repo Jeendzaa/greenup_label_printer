@@ -349,10 +349,41 @@ class ZPLService:
                 "musi być liczbą od 1 do 10."
             )
 
+        barcode_type = element.get("barcode_type", "code128")
+        show_text = element.get("show_text", False)
+
+        if barcode_type not in {
+            "code128",
+            "code39",
+            "ean13",
+            "ean8",
+            "upca",
+            "i2of5",
+        }:
+            raise ValueError(
+                "Nieobsługiwany rodzaj kodu kreskowego."
+            )
+
+        if not isinstance(show_text, bool):
+            raise ValueError(
+                "Opcja podpisu kodu kreskowego musi być wartością logiczną."
+            )
+
+        human_readable = "Y" if show_text else "N"
+
+        barcode_commands = {
+            "code128": f"^BCN,{barcode_height},{human_readable},N,N",
+            "code39": f"^B3N,{barcode_height},{human_readable},N,N",
+            "ean13": f"^BEN,{barcode_height},{human_readable}",
+            "ean8": f"^B8N,{barcode_height},{human_readable}",
+            "upca": f"^BUN,{barcode_height},{human_readable}",
+            "i2of5": f"^B2N,{barcode_height},{human_readable},N",
+        }
+
         return (
             f"^FO{x},{y}"
             f"^BY{module_width}"
-            f"^BCN,{barcode_height},N,N,N"
+            f"{barcode_commands[barcode_type]}"
             f"^FD{self._safe_value(content)}^FS"
         )
 
@@ -421,10 +452,22 @@ class ZPLService:
             element.get("thickness", 0.3)
         )
 
+        orientation = element.get("orientation", "horizontal")
+        if orientation == "horizontal":
+            width = length
+            height = max(1, thickness)
+        elif orientation == "vertical":
+            width = max(1, thickness)
+            height = length
+        else:
+            raise ValueError(
+                "Nieprawidłowa orientacja linii. "
+                "Dozwolone wartości: horizontal, vertical."
+            )
+
         return (
             f"^FO{x},{y}"
-            f"^GB{length},{max(1, thickness)},"
-            f"{max(1, thickness)}^FS"
+            f"^GB{width},{height},{max(1, thickness)}^FS"
         )
 
     # =========================================================
