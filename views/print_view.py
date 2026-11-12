@@ -4,7 +4,6 @@ from PIL import Image as PILImage
 
 from services.preview_service import PreviewService
 
-
 class PrintView(ctk.CTkFrame):
     def __init__(
         self,
@@ -134,7 +133,7 @@ class PrintView(ctk.CTkFrame):
             padx=20,
             pady=(0, 12),
         )
-        quantity_frame.grid_columnconfigure(0, weight=1)
+        quantity_frame.grid_columnconfigure((0, 1), weight=1)
 
         ctk.CTkLabel(
             quantity_frame,
@@ -145,6 +144,19 @@ class PrintView(ctk.CTkFrame):
             column=0,
             sticky="w",
             pady=(0, 5),
+            padx=(0, 8),
+        )
+
+        ctk.CTkLabel(
+            quantity_frame,
+            text="Orientacja wydruku",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).grid(
+            row=0,
+            column=1,
+            sticky="w",
+            pady=(0, 5),
+            padx=(8, 0),
         )
 
         self.quantity_entry = ctk.CTkEntry(
@@ -156,8 +168,29 @@ class PrintView(ctk.CTkFrame):
             row=1,
             column=0,
             sticky="ew",
+            padx=(0, 8),
         )
         self.quantity_entry.insert(0, "1")
+
+        self.orientation_var = ctk.StringVar(value="0° — Oryginalna")
+        self.orientation_selector = ctk.CTkOptionMenu(
+            quantity_frame,
+            variable=self.orientation_var,
+            values=[
+                "0° — Oryginalna",
+                "90° — W prawo",
+                "180° — Do góry nogami",
+                "270° — W lewo",
+            ],
+            height=36,
+            command=self._on_orientation_changed,
+        )
+        self.orientation_selector.grid(
+            row=1,
+            column=1,
+            sticky="ew",
+            padx=(8, 0),
+        )
         self.quantity_entry.bind(
             "<KeyRelease>",
             self._on_quantity_changed,
@@ -521,6 +554,10 @@ class PrintView(ctk.CTkFrame):
                 text="Drukuj etykiety"
             )
 
+    def _on_orientation_changed(self, _value=None):
+        """Odświeża podgląd po zmianie orientacji wydruku."""
+        self._schedule_preview()
+
     def _get_current_values(self):
         return {
             name: entry.get()
@@ -618,7 +655,26 @@ class PrintView(ctk.CTkFrame):
             if self._destroyed:
                 return
 
-            # Ograniczamy rozmiar obrazu do dostępnego miejsca.
+            # Podgląd musi pokazywać tę samą orientację, która zostanie
+            # zastosowana podczas wysyłania zadania do drukarki.
+            orientation_labels = {
+                "0° — Oryginalna": 0,
+                "90° — W prawo": 90,
+                "180° — Do góry nogami": 180,
+                "270° — W lewo": 270,
+            }
+            rotation = orientation_labels.get(self.orientation_var.get(), 0)
+
+            transpose = {
+                90: PILImage.Transpose.ROTATE_270,
+                180: PILImage.Transpose.ROTATE_180,
+                270: PILImage.Transpose.ROTATE_90,
+            }
+            if rotation:
+                image = image.transpose(transpose[rotation])
+
+            # Po obrocie nadal dopasowujemy cały obraz do obszaru podglądu.
+            # Dzięki temu etykieta nie jest przycinana przy zmianie proporcji.
             image.thumbnail(
                 (420, 300),
                 PILImage.Resampling.LANCZOS,
@@ -666,6 +722,62 @@ class PrintView(ctk.CTkFrame):
     # =========================================================
     # PRINTING
     # =========================================================
+
+    def _rotate_zpl_for_print(self, zpl, template, rotation):
+        """Obraca całą etykietę na potrzeby bieżącego zadania drukowania.
+
+        Szablon pozostaje bez zmian. Etykieta jest renderowana w natywnej
+        rozdzielczości podglądu (203 DPI), obracana i wysyłana jako grafika ZPL.
+        """
+        if rotation not in (90, 180, 270):
+            raise ValueError("Nieobsługiwany kąt obrotu etykiety.")
+
+        image = self.preview_service.generate_preview(
+            zpl,
+            float(template["width"]),
+            float(template["height"]),
+        )
+
+        transpose = {
+            90: PILImage.Transpose.ROTATE_270,
+            180: PILImage.Transpose.ROTATE_180,
+            270: PILImage.Transpose.ROTATE_90,
+        }
+        image = image.transpose(transpose[rotation])
+
+        bitmap = (
+            image.convert("L")
+            .point(lambda pixel: 0 if pixel < 128 else 255)
+            .convert("1", dither=PILImage.Dither.NONE)
+        )
+
+        width, height = bitmap.size
+        row_bytes = (width + 7) // 8
+        packed = bytearray(bitmap.tobytes())
+
+        # PIL: 0 = czarny, 1 = biały. ZPL ^GFA: 1 = czarny.
+        for index in range(len(packed)):
+            packed[index] ^= 0xFF
+
+        # Bity dopełniające poza prawą krawędzią muszą pozostać białe.
+        remainder = width % 8
+        if remainder:
+            padding_mask = (0xFF << (8 - remainder)) & 0xFF
+            for row in range(height):
+                packed[row * row_bytes + row_bytes - 1] &= padding_mask
+
+        total_bytes = row_bytes * height
+        graphic_data = packed.hex().upper()
+
+        return "\n".join((
+            "^XA",
+            "^CI28",
+            f"^PW{width}",
+            f"^LL{height}",
+            "^LH0,0",
+            f"^FO0,0^GFA,{total_bytes},{total_bytes},{row_bytes},{graphic_data}^FS",
+            "^XZ",
+        ))
 
     def _print_label(self):
         template = self.templates_by_name.get(
@@ -723,16 +835,48 @@ class PrintView(ctk.CTkFrame):
             )
             return
 
+        orientation_labels = {
+            "0° — Oryginalna": 0,
+            "90° — W prawo": 90,
+            "180° — Do góry nogami": 180,
+            "270° — W lewo": 270,
+        }
+        rotation = orientation_labels.get(self.orientation_var.get(), 0)
+
+        try:
+            if rotation:
+                zpl = self._rotate_zpl_for_print(
+                    zpl,
+                    template,
+                    rotation,
+                )
+        except (ValueError, TypeError, OSError, RuntimeError) as error:
+            messagebox.showerror(
+                "Nie można obrócić etykiety",
+                str(error),
+                parent=self,
+            )
+            return
+
+        output_width = template.get("width")
+        output_height = template.get("height")
+        if rotation in (90, 270):
+            output_width, output_height = output_height, output_width
+
         confirmed = messagebox.askyesno(
             "Potwierdź drukowanie",
             (
-                f"Czy wydrukować {quantity} "
-                f"{'kopię' if quantity == 1 else 'kopii'} etykiety?"
+                f"Szablon: {template.get('name', 'Etykieta')}\n"
+                f"Orientacja: {rotation}°\n"
+                f"Wymiary wydruku: {output_width} × {output_height} mm\n"
+                f"Liczba etykiet: {quantity}\n\n"
+                "Czy wysłać etykiety do drukarki?"
             ),
             parent=self,
         )
 
         if not confirmed:
+            self.orientation_var.set("0° — Oryginalna")
             return
 
         self.print_button.configure(
@@ -777,6 +921,7 @@ class PrintView(ctk.CTkFrame):
             self.print_button.configure(
                 state="normal",
             )
+            self.orientation_var.set("0° — Oryginalna")
             self._on_quantity_changed()
 
     # =========================================================

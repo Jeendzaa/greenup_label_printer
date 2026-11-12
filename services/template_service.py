@@ -189,6 +189,38 @@ class TemplateService:
 
         return file_path
 
+    def delete_template(self, filename):
+        """
+        Usuwa zapisany szablon JSON z katalogu użytkownika.
+
+        Przyjmuje wyłącznie nazwę pliku, a nie dowolną ścieżkę.
+        """
+        if not isinstance(filename, str) or not filename.strip():
+            raise ValueError("Nieprawidłowa nazwa pliku szablonu.")
+
+        relative_path = Path(filename)
+
+        if (
+            relative_path.name != filename
+            or relative_path.suffix.lower() != ".json"
+            or filename in {".", ".."}
+        ):
+            raise ValueError("Można usuwać wyłącznie pliki JSON z katalogu szablonów.")
+
+        templates_dir = self.templates_dir.resolve()
+        file_path = (templates_dir / relative_path).resolve()
+
+        if file_path.parent != templates_dir:
+            raise ValueError("Plik szablonu znajduje się poza katalogiem szablonów.")
+
+        if not file_path.is_file():
+            raise FileNotFoundError(
+                f"Nie znaleziono szablonu: {filename}"
+            )
+
+        file_path.unlink()
+        return file_path
+
     @staticmethod
     def _make_filename(template_id):
         """
@@ -536,6 +568,24 @@ class TemplateService:
             minimum=1,
         )
 
+        barcode_type = element.get("barcode_type", "code128")
+        if barcode_type not in {
+            "code128",
+            "code39",
+            "ean13",
+            "ean8",
+            "upca",
+            "i2of5",
+        }:
+            raise ValueError(
+                f"Element {index}: nieobsługiwany rodzaj kodu kreskowego."
+            )
+
+        if not isinstance(element.get("show_text", False), bool):
+            raise ValueError(
+                f"Element {index}: właściwość 'show_text' musi być wartością logiczną."
+            )
+
     @staticmethod
     def _validate_qr_element(element, index):
         content = element.get("content", "")
@@ -567,6 +617,13 @@ class TemplateService:
                 element.get(property_name),
                 f"Element {index}: {property_name}",
                 minimum=0.001,
+            )
+
+        orientation = element.get("orientation", "horizontal")
+        if orientation not in ("horizontal", "vertical"):
+            raise ValueError(
+                f"Element {index}: orientacja linii musi mieć "
+                "wartość 'horizontal' albo 'vertical'."
             )
 
     @staticmethod
